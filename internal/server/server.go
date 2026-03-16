@@ -12,6 +12,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/vibe-vcs/vibe/internal/core"
+	"github.com/vibe-vcs/vibe/internal/roles"
 )
 
 // Server is the Vibe HTTP server that serves repos to linked clients.
@@ -19,6 +20,7 @@ type Server struct {
 	Config *Config
 	Repo   *core.Repo
 	Hub    *Hub
+	Roles  *roles.Manager // nil if roles not configured
 }
 
 func New(cfg *Config) (*Server, error) {
@@ -26,11 +28,18 @@ func New(cfg *Config) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("repo not found at %s: %w", cfg.RepoPath, err)
 	}
-	return &Server{
+	srv := &Server{
 		Config: cfg,
 		Repo:   repo,
 		Hub:    NewHub(),
-	}, nil
+	}
+	// Check if roles are configured
+	rm := roles.NewManager(repo.VibeDir)
+	if _, err := rm.Load(); err == nil {
+		srv.Roles = rm
+		log.Printf("Role-based access control enabled")
+	}
+	return srv, nil
 }
 
 // ListenAndServe starts the HTTP server.
@@ -45,7 +54,8 @@ func (s *Server) ListenAndServe() error {
 	mux.HandleFunc("/api/commit/", s.authMiddleware(s.handleCommit))
 	mux.HandleFunc("/api/blob/", s.authMiddleware(s.handleBlob))
 	mux.HandleFunc("/api/manifest", s.authMiddleware(s.handleManifest))
-	mux.HandleFunc("/api/push", s.authMiddleware(s.handlePush))
+	mux.HandleFunc("/api/push", s.authMiddleware(s.writeMiddleware(s.handlePush)))
+	mux.HandleFunc("/api/roles", s.authMiddleware(s.handleRoles))
 	mux.HandleFunc("/ws", s.authMiddleware(s.handleWebSocket))
 
 	addr := fmt.Sprintf("%s:%d", s.Config.Host, s.Config.Port)
@@ -69,21 +79,68 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/commit/", s.authMiddleware(s.handleCommit))
 	mux.HandleFunc("/api/blob/", s.authMiddleware(s.handleBlob))
 	mux.HandleFunc("/api/manifest", s.authMiddleware(s.handleManifest))
-	mux.HandleFunc("/api/push", s.authMiddleware(s.handlePush))
+	mux.HandleFunc("/api/push", s.authMiddleware(s.writeMiddleware(s.handlePush)))
+	mux.HandleFunc("/api/roles", s.authMiddleware(s.handleRoles))
 	mux.HandleFunc("/ws", s.authMiddleware(s.handleWebSocket))
 	return mux
 }
 
+func (s *Server) extractToken(r *http.Request) string {
+	token := r.Header.Get("Authorization")
+	if token == "" {
+		token = r.URL.Query().Get("token")
+	}
+	// Strip "Bearer " prefix if present
+	if strings.HasPrefix(token, "Bearer ") {
+		token = strings.TrimPrefix(token, "Bearer ")
+	}
+	return token
+}
+
 func (s *Server) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if s.Config.Auth.Token != "" {
-			token := r.Header.Get("Authorization")
-			// Also check query param for WebSocket connections
+		token := s.extractToken(r)
+
+		// Role-based auth takes priority
+		if s.Roles != nil {
 			if token == "" {
-				token = r.URL.Query().Get("token")
+				http.Error(w, "unauthorized — token required", http.StatusUnauthorized)
+				return
 			}
-			if token != "Bearer "+s.Config.Auth.Token && token != s.Config.Auth.Token {
+			user, err := s.Roles.GetUserByToken(token)
+			if err != nil {
+				http.Error(w, "unauthorized — invalid token", http.StatusUnauthorized)
+				return
+			}
+			if !roles.CanRead(user.Role) {
+				http.Error(w, "forbidden", http.StatusForbidden)
+				return
+			}
+			// Store user info in header for downstream handlers
+			r.Header.Set("X-Vibe-User", user.Name)
+			r.Header.Set("X-Vibe-Role", string(user.Role))
+			next(w, r)
+			return
+		}
+
+		// Fallback: simple shared token
+		if s.Config.Auth.Token != "" {
+			if token != s.Config.Auth.Token {
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+		}
+		next(w, r)
+	}
+}
+
+// writeMiddleware wraps a handler requiring write permission (admin or contributor).
+func (s *Server) writeMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if s.Roles != nil {
+			roleStr := roles.Role(r.Header.Get("X-Vibe-Role"))
+			if !roles.CanWrite(roleStr) {
+				http.Error(w, "forbidden — write access required", http.StatusForbidden)
 				return
 			}
 		}
@@ -318,6 +375,35 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	// Block on read pump (detects disconnect)
 	client.ReadPump()
 	log.Printf("Client disconnected (total: %d)", s.Hub.ClientCount())
+}
+
+// GET /api/roles - list users and roles (admin only sees tokens, others see names+roles)
+func (s *Server) handleRoles(w http.ResponseWriter, r *http.Request) {
+	if s.Roles == nil {
+		writeJSON(w, map[string]string{"error": "roles not configured"})
+		return
+	}
+	rf, err := s.Roles.Load()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	roleStr := roles.Role(r.Header.Get("X-Vibe-Role"))
+	type userInfo struct {
+		Name  string `json:"name"`
+		Role  string `json:"role"`
+		Token string `json:"token,omitempty"`
+	}
+	var users []userInfo
+	for _, u := range rf.Users {
+		ui := userInfo{Name: u.Name, Role: string(u.Role)}
+		if roles.CanManage(roleStr) {
+			ui.Token = u.Token
+		}
+		users = append(users, ui)
+	}
+	writeJSON(w, map[string]interface{}{"owner": rf.Owner, "users": users})
 }
 
 func writeJSON(w http.ResponseWriter, v interface{}) {

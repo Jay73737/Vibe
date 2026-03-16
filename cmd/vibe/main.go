@@ -12,7 +12,9 @@ import (
 	"github.com/vibe-vcs/vibe/internal/core"
 	"github.com/vibe-vcs/vibe/internal/history"
 	"github.com/vibe-vcs/vibe/internal/link"
+	"github.com/vibe-vcs/vibe/internal/roles"
 	"github.com/vibe-vcs/vibe/internal/server"
+	"github.com/vibe-vcs/vibe/internal/ui"
 )
 
 func main() {
@@ -44,6 +46,14 @@ func main() {
 		cmdSessions()
 	case "restore":
 		cmdRestore()
+	case "roles":
+		cmdRoles()
+	case "grant":
+		cmdGrant()
+	case "revoke":
+		cmdRevoke()
+	case "ui":
+		cmdUI()
 	case "serve":
 		cmdServe()
 	case "diff":
@@ -101,8 +111,14 @@ Link Commands:
   pull              Fetch all files from source
   sync              Pull latest changes from source
 
+Role Commands:
+  roles             List users and roles (use 'roles init <name>' to set up)
+  grant <user> <role>  Assign a role (admin, contributor, reader)
+  revoke <user>     Remove a user's access
+
 Server Commands:
-  serve             Start the Vibe server (--config <file>, --port <n>)`)
+  serve             Start the Vibe server (--config <file>, --port <n>)
+  ui                Launch the web UI (--port <n>, --server <url>)`)
 }
 
 func cmdInit() {
@@ -514,6 +530,123 @@ func cmdBlame() {
 		}
 		fmt.Printf("\033[33m%s\033[0m %-12s %s \033[2m%4d\033[0m | %s\n",
 			bl.CommitHash.Short(), bl.Author, ts, bl.LineNum, bl.Content)
+	}
+}
+
+func cmdRoles() {
+	repo, err := core.FindRepo(".")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	mgr := roles.NewManager(repo.VibeDir)
+
+	// Check for 'roles init <name>'
+	if len(os.Args) >= 4 && os.Args[2] == "init" {
+		ownerName := os.Args[3]
+		token := ""
+		for i := 4; i < len(os.Args); i++ {
+			if os.Args[i] == "--token" && i+1 < len(os.Args) {
+				token = os.Args[i+1]
+				i++
+			}
+		}
+		if err := mgr.Init(ownerName, token); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		user, _ := mgr.GetUser(ownerName)
+		fmt.Printf("Roles initialized. Owner: %s (admin)\n", ownerName)
+		fmt.Printf("Your token: %s\n", user.Token)
+		return
+	}
+
+	// List roles
+	rf, err := mgr.Load()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("Owner: %s\n\n", rf.Owner)
+	fmt.Printf("%-20s %-15s %s\n", "USER", "ROLE", "TOKEN")
+	fmt.Printf("%-20s %-15s %s\n", "----", "----", "-----")
+	for _, u := range rf.Users {
+		fmt.Printf("%-20s %-15s %s\n", u.Name, u.Role, u.Token)
+	}
+}
+
+func cmdGrant() {
+	if len(os.Args) < 4 {
+		fmt.Fprintln(os.Stderr, "usage: vibe grant <user> <role> [--token <token>]")
+		os.Exit(1)
+	}
+	repo, err := core.FindRepo(".")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	mgr := roles.NewManager(repo.VibeDir)
+	userName := os.Args[2]
+	role := roles.Role(os.Args[3])
+	token := ""
+	for i := 4; i < len(os.Args); i++ {
+		if os.Args[i] == "--token" && i+1 < len(os.Args) {
+			token = os.Args[i+1]
+			i++
+		}
+	}
+
+	if err := mgr.Grant(userName, role, token); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+
+	user, _ := mgr.GetUser(userName)
+	fmt.Printf("Granted '%s' role to %s\n", role, userName)
+	fmt.Printf("Token: %s\n", user.Token)
+}
+
+func cmdRevoke() {
+	if len(os.Args) < 3 {
+		fmt.Fprintln(os.Stderr, "usage: vibe revoke <user>")
+		os.Exit(1)
+	}
+	repo, err := core.FindRepo(".")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	mgr := roles.NewManager(repo.VibeDir)
+	if err := mgr.Revoke(os.Args[2]); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("Revoked access for '%s'\n", os.Args[2])
+}
+
+func cmdUI() {
+	port := 7434
+	serverURL := "http://localhost:7433"
+
+	for i := 2; i < len(os.Args); i++ {
+		switch os.Args[i] {
+		case "--port", "-p":
+			if i+1 < len(os.Args) {
+				fmt.Sscanf(os.Args[i+1], "%d", &port)
+				i++
+			}
+		case "--server", "-s":
+			if i+1 < len(os.Args) {
+				serverURL = os.Args[i+1]
+				i++
+			}
+		}
+	}
+
+	if err := ui.Serve(port, serverURL); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
 	}
 }
 
