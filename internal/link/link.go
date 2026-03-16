@@ -16,6 +16,7 @@ type LinkConfig struct {
 	Source     string `json:"source"`      // local path or URL
 	SourceType string `json:"source_type"` // "local" or "remote"
 	Branch     string `json:"branch"`      // branch to track
+	Token      string `json:"token,omitempty"` // auth token for remote servers
 }
 
 // Manager handles repo linking and syncing.
@@ -37,7 +38,16 @@ func Link(targetDir, source string) (*core.Repo, error) {
 	}
 
 	if sourceType == "remote" {
-		return nil, fmt.Errorf("remote linking will be available in Phase 5 (server)")
+		token := ""
+		if len(os.Args) > 4 {
+			// Allow token as extra arg: vibe link <url> <dir> --token <token>
+			for i, arg := range os.Args {
+				if arg == "--token" && i+1 < len(os.Args) {
+					token = os.Args[i+1]
+				}
+			}
+		}
+		return LinkRemote(targetDir, source, token)
 	}
 
 	// Verify source is a vibe repo
@@ -154,39 +164,48 @@ func (m *Manager) Fetch(relPath string) ([]byte, error) {
 		}
 	}
 
-	// Fetch from source
+	var data []byte
+
 	if config.SourceType == "local" {
 		sourceRepo, err := core.FindRepo(config.Source)
 		if err != nil {
 			return nil, fmt.Errorf("source repo unavailable: %w", err)
 		}
-		data, err := sourceRepo.Store.ReadBlob(info.Hash)
+		data, err = sourceRepo.Store.ReadBlob(info.Hash)
 		if err != nil {
 			return nil, fmt.Errorf("fetch blob from source: %w", err)
 		}
-
-		// Cache locally
-		m.Repo.Store.WriteBlob(data)
-
-		// Write to working directory
-		absPath := filepath.Join(m.Repo.WorkDir, filepath.FromSlash(relPath))
-		os.MkdirAll(filepath.Dir(absPath), 0755)
-		if err := os.WriteFile(absPath, data, 0644); err != nil {
-			return nil, fmt.Errorf("write file: %w", err)
+	} else if config.SourceType == "remote" {
+		var err error
+		data, err = FetchRemote(m.Repo, config, relPath, info.Hash)
+		if err != nil {
+			return nil, err
 		}
-
-		// Update manifest
+		// FetchRemote already writes to disk and caches
 		info.Cached = true
 		manifest.Files[relPath] = info
 		saveManifest(m.Repo, manifest)
-
-		// Update index
 		m.Repo.AddToIndex(relPath)
-
 		return data, nil
+	} else {
+		return nil, fmt.Errorf("unknown source type: %s", config.SourceType)
 	}
 
-	return nil, fmt.Errorf("remote fetch not yet supported")
+	// Cache locally (local path)
+	m.Repo.Store.WriteBlob(data)
+
+	absPath := filepath.Join(m.Repo.WorkDir, filepath.FromSlash(relPath))
+	os.MkdirAll(filepath.Dir(absPath), 0755)
+	if err := os.WriteFile(absPath, data, 0644); err != nil {
+		return nil, fmt.Errorf("write file: %w", err)
+	}
+
+	info.Cached = true
+	manifest.Files[relPath] = info
+	saveManifest(m.Repo, manifest)
+	m.Repo.AddToIndex(relPath)
+
+	return data, nil
 }
 
 // Pull fetches ALL files from the source at once.
@@ -216,8 +235,8 @@ func (m *Manager) Sync() (int, error) {
 		return 0, fmt.Errorf("not a linked repo: %w", err)
 	}
 
-	if config.SourceType != "local" {
-		return 0, fmt.Errorf("remote sync not yet supported")
+	if config.SourceType == "remote" {
+		return SyncRemote(m.Repo, config)
 	}
 
 	sourceRepo, err := core.FindRepo(config.Source)

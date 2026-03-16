@@ -12,6 +12,7 @@ import (
 	"github.com/vibe-vcs/vibe/internal/core"
 	"github.com/vibe-vcs/vibe/internal/history"
 	"github.com/vibe-vcs/vibe/internal/link"
+	"github.com/vibe-vcs/vibe/internal/server"
 )
 
 func main() {
@@ -43,6 +44,8 @@ func main() {
 		cmdSessions()
 	case "restore":
 		cmdRestore()
+	case "serve":
+		cmdServe()
 	case "diff":
 		cmdDiff()
 	case "revert":
@@ -96,7 +99,10 @@ Link Commands:
   link <source>     Link to a source repo (local path or URL)
   fetch <file>      Fetch a single file from source
   pull              Fetch all files from source
-  sync              Pull latest changes from source`)
+  sync              Pull latest changes from source
+
+Server Commands:
+  serve             Start the Vibe server (--config <file>, --port <n>)`)
 }
 
 func cmdInit() {
@@ -511,18 +517,74 @@ func cmdBlame() {
 	}
 }
 
+func cmdServe() {
+	cfg := server.DefaultConfig()
+
+	for i := 2; i < len(os.Args); i++ {
+		switch os.Args[i] {
+		case "--config", "-c":
+			if i+1 < len(os.Args) {
+				loaded, err := server.LoadConfig(os.Args[i+1])
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "error loading config: %v\n", err)
+					os.Exit(1)
+				}
+				cfg = loaded
+				i++
+			}
+		case "--port", "-p":
+			if i+1 < len(os.Args) {
+				fmt.Sscanf(os.Args[i+1], "%d", &cfg.Port)
+				i++
+			}
+		case "--token":
+			if i+1 < len(os.Args) {
+				cfg.Auth.Token = os.Args[i+1]
+				i++
+			}
+		}
+	}
+
+	srv, err := server.New(cfg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	if err := srv.ListenAndServe(); err != nil {
+		fmt.Fprintf(os.Stderr, "server error: %v\n", err)
+		os.Exit(1)
+	}
+}
+
 func cmdLink() {
 	if len(os.Args) < 3 {
-		fmt.Fprintln(os.Stderr, "usage: vibe link <source> [target-dir]")
+		fmt.Fprintln(os.Stderr, "usage: vibe link <source> [target-dir] [--token <token>]")
 		os.Exit(1)
 	}
 	source := os.Args[2]
 	targetDir := "."
-	if len(os.Args) > 3 {
-		targetDir = os.Args[3]
+	token := ""
+
+	i := 3
+	for i < len(os.Args) {
+		if os.Args[i] == "--token" && i+1 < len(os.Args) {
+			token = os.Args[i+1]
+			i += 2
+		} else if targetDir == "." {
+			targetDir = os.Args[i]
+			i++
+		} else {
+			i++
+		}
 	}
 
-	repo, err := link.Link(targetDir, source)
+	var repo *core.Repo
+	var err error
+	if strings.HasPrefix(source, "http://") || strings.HasPrefix(source, "https://") {
+		repo, err = link.LinkRemote(targetDir, source, token)
+	} else {
+		repo, err = link.Link(targetDir, source)
+	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)

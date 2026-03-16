@@ -1,0 +1,21 @@
+# Vibe Server Configuration
+# Copy this file and customize for your deployment.
+
+# Server bind address and port
+host = "0.0.0.0"
+port = 7433
+
+# Path to the vibe repository to serve
+repo_path = "."
+
+# TLS configuration (optional)
+[tls]
+enabled = false
+cert_file = ""
+key_file = ""
+
+# Authentication
+# Set a token to require clients to authenticate.
+# Clients must send: Authorization: Bearer <token>
+[auth]
+token = ""
