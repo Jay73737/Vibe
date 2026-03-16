@@ -11,6 +11,7 @@ import (
 	"github.com/vibe-vcs/vibe/internal/branch"
 	"github.com/vibe-vcs/vibe/internal/core"
 	"github.com/vibe-vcs/vibe/internal/history"
+	"github.com/vibe-vcs/vibe/internal/link"
 )
 
 func main() {
@@ -48,6 +49,14 @@ func main() {
 		cmdRevert()
 	case "blame":
 		cmdBlame()
+	case "link":
+		cmdLink()
+	case "fetch":
+		cmdFetch()
+	case "pull":
+		cmdPull()
+	case "sync":
+		cmdSync()
 	case "help", "--help", "-h":
 		printUsage()
 	default:
@@ -81,7 +90,13 @@ History Commands:
   diff              Show changes in working tree vs last commit
   diff <hash> <hash> Compare two commits
   revert <hash>     Revert repo to a previous commit
-  blame <file>      Show per-line authorship`)
+  blame <file>      Show per-line authorship
+
+Link Commands:
+  link <source>     Link to a source repo (local path or URL)
+  fetch <file>      Fetch a single file from source
+  pull              Fetch all files from source
+  sync              Pull latest changes from source`)
 }
 
 func cmdInit() {
@@ -493,6 +508,100 @@ func cmdBlame() {
 		}
 		fmt.Printf("\033[33m%s\033[0m %-12s %s \033[2m%4d\033[0m | %s\n",
 			bl.CommitHash.Short(), bl.Author, ts, bl.LineNum, bl.Content)
+	}
+}
+
+func cmdLink() {
+	if len(os.Args) < 3 {
+		fmt.Fprintln(os.Stderr, "usage: vibe link <source> [target-dir]")
+		os.Exit(1)
+	}
+	source := os.Args[2]
+	targetDir := "."
+	if len(os.Args) > 3 {
+		targetDir = os.Args[3]
+	}
+
+	repo, err := link.Link(targetDir, source)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+
+	mgr := link.NewManager(repo)
+	config, manifest, _ := mgr.Status()
+
+	fmt.Printf("Linked to %s (%s)\n", config.Source, config.SourceType)
+	if manifest != nil {
+		cached := 0
+		for _, f := range manifest.Files {
+			if f.Cached {
+				cached++
+			}
+		}
+		fmt.Printf("  %d files in manifest (%d cached)\n", len(manifest.Files), cached)
+		fmt.Println("  Run 'vibe pull' to fetch all files, or access them on-demand.")
+	}
+}
+
+func cmdFetch() {
+	if len(os.Args) < 3 {
+		fmt.Fprintln(os.Stderr, "usage: vibe fetch <file> [file...]")
+		os.Exit(1)
+	}
+	repo, err := core.FindRepo(".")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	mgr := link.NewManager(repo)
+
+	for _, path := range os.Args[2:] {
+		_, err := mgr.Fetch(path)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error fetching %s: %v\n", path, err)
+			os.Exit(1)
+		}
+		fmt.Printf("  fetched %s\n", path)
+	}
+}
+
+func cmdPull() {
+	repo, err := core.FindRepo(".")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	mgr := link.NewManager(repo)
+	count, err := mgr.Pull()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	if count == 0 {
+		fmt.Println("All files already cached.")
+	} else {
+		fmt.Printf("Fetched %d file(s).\n", count)
+	}
+}
+
+func cmdSync() {
+	repo, err := core.FindRepo(".")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	mgr := link.NewManager(repo)
+	changed, err := mgr.Sync()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	if changed == 0 {
+		fmt.Println("Already up to date.")
+	} else {
+		fmt.Printf("Synced %d changed file(s) from source.\n", changed)
+		fmt.Println("Run 'vibe pull' to fetch updated contents.")
 	}
 }
 
