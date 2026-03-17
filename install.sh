@@ -151,9 +151,9 @@ else
         step "Downloading source archive..."
         TMP_ZIP="$(mktemp)"
         if command -v curl &>/dev/null; then
-            curl -fsSL "https://github.com/vibe-vcs/vibe/archive/refs/heads/main.tar.gz" -o "$TMP_ZIP"
+            curl -fsSL "https://github.com/Jay73737/Vibe/archive/refs/heads/main.tar.gz" -o "$TMP_ZIP"
         else
-            wget -q "https://github.com/vibe-vcs/vibe/archive/refs/heads/main.tar.gz" -O "$TMP_ZIP"
+            wget -q "https://github.com/Jay73737/Vibe/archive/refs/heads/main.tar.gz" -O "$TMP_ZIP"
         fi
         tar -xzf "$TMP_ZIP" -C "$SOURCE_DIR" --strip-components=1
         rm -f "$TMP_ZIP"

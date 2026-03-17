@@ -13,7 +13,7 @@
     Skip Go installation even if not found (fail instead).
 .EXAMPLE
     .\install.ps1
-    irm https://raw.githubusercontent.com/vibe-vcs/vibe/main/install.ps1 | iex
+    irm https://raw.githubusercontent.com/Jay73737/Vibe/main/install.ps1 | iex
 #>
 param(
     [string]$InstallDir = "$env:USERPROFILE\.vibe\bin",
@@ -152,7 +152,7 @@ if (-not $sourceDir) {
         }
     } else {
         Write-Warn "Git not found. Downloading source archive..."
-        $zipUrl = "https://github.com/vibe-vcs/vibe/archive/refs/heads/main.zip"
+        $zipUrl = "https://github.com/Jay73737/Vibe/archive/refs/heads/main.zip"
         $zipPath = Join-Path $env:TEMP "vibe-src.zip"
         Invoke-WebRequest -Uri $zipUrl -OutFile $zipPath -UseBasicParsing
         Expand-Archive -Path $zipPath -DestinationPath $env:TEMP -Force
