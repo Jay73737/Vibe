@@ -13,6 +13,16 @@ import (
 
 const VibeDirName = ".vibe"
 
+// BranchMeta holds metadata about a branch stored as JSON in the ref file.
+type BranchMeta struct {
+	Head        Hash      `json:"head"`
+	Parent      string    `json:"parent,omitempty"`     // parent branch name
+	ForkPoint   Hash      `json:"fork_point,omitempty"` // commit hash when branch was forked
+	Author      string    `json:"author,omitempty"`
+	Description string    `json:"description,omitempty"`
+	CreatedAt   time.Time `json:"created_at,omitempty"`
+}
+
 // LoadIgnorePatterns reads .vibeignore and returns patterns to skip.
 func LoadIgnorePatterns(workDir string) []string {
 	f, err := os.Open(filepath.Join(workDir, ".vibeignore"))
@@ -141,26 +151,63 @@ func (r *Repo) Head() (branch string, commitHash Hash, err error) {
 		return "", Hash{}, fmt.Errorf("detached HEAD not yet supported")
 	}
 	branch = strings.TrimPrefix(ref, "ref: refs/branches/")
-	refPath := filepath.Join(r.VibeDir, strings.TrimPrefix(ref, "ref: "))
-	commitData, err := os.ReadFile(refPath)
+	meta, err := r.ReadBranchMeta(branch)
 	if err != nil {
-		// Branch exists but has no commits yet
+		// Branch exists in HEAD but no ref file yet (new repo, no commits)
 		return branch, Hash{}, nil
 	}
-	h, err := HashFromHex(strings.TrimSpace(string(commitData)))
-	if err != nil {
-		return branch, Hash{}, fmt.Errorf("parse ref hash: %w", err)
-	}
-	return branch, h, nil
+	return branch, meta.Head, nil
 }
 
-// UpdateRef sets a branch ref to point at the given commit hash.
-func (r *Repo) UpdateRef(branch string, h Hash) error {
+// ReadBranchMeta reads the full metadata for a branch.
+func (r *Repo) ReadBranchMeta(branch string) (*BranchMeta, error) {
+	refPath := filepath.Join(r.VibeDir, "refs", "branches", branch)
+	data, err := os.ReadFile(refPath)
+	if err != nil {
+		return nil, err
+	}
+	content := strings.TrimSpace(string(data))
+
+	// JSON format
+	if strings.HasPrefix(content, "{") {
+		var meta BranchMeta
+		if err := json.Unmarshal([]byte(content), &meta); err != nil {
+			return nil, fmt.Errorf("parse branch metadata: %w", err)
+		}
+		return &meta, nil
+	}
+
+	// Legacy plain hash format
+	h, err := HashFromHex(content)
+	if err != nil {
+		return nil, fmt.Errorf("parse branch ref: %w", err)
+	}
+	return &BranchMeta{Head: h}, nil
+}
+
+// WriteBranchMeta writes full branch metadata as JSON.
+func (r *Repo) WriteBranchMeta(branch string, meta *BranchMeta) error {
 	refPath := filepath.Join(r.VibeDir, "refs", "branches", branch)
 	if err := os.MkdirAll(filepath.Dir(refPath), 0755); err != nil {
 		return err
 	}
-	return os.WriteFile(refPath, []byte(h.String()+"\n"), 0644)
+	data, err := json.MarshalIndent(meta, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(refPath, data, 0644)
+}
+
+// UpdateRef sets a branch ref to point at the given commit hash,
+// preserving any existing branch metadata.
+func (r *Repo) UpdateRef(branch string, h Hash) error {
+	meta, err := r.ReadBranchMeta(branch)
+	if err != nil {
+		// New branch or unreadable — create fresh
+		meta = &BranchMeta{}
+	}
+	meta.Head = h
+	return r.WriteBranchMeta(branch, meta)
 }
 
 // ReadIndex loads the staging index.

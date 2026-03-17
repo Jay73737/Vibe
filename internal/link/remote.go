@@ -146,11 +146,7 @@ func LinkRemote(targetDir, serverURL, token string) (*core.Repo, error) {
 		return nil, err
 	}
 
-	// Set HEAD
-	headPath := filepath.Join(repo.VibeDir, "HEAD")
-	os.WriteFile(headPath, []byte("ref: refs/branches/"+branch+"\n"), 0644)
-
-	// Sync refs
+	// Sync refs (HEAD will be set when working branch is created below)
 	refs, err := client.GetRefs()
 	if err == nil {
 		for name, hashStr := range refs {
@@ -201,6 +197,14 @@ func LinkRemote(targetDir, serverURL, token string) (*core.Repo, error) {
 			os.MkdirAll(dir, 0755)
 		}
 		saveManifest(repo, manifest)
+	}
+
+	// Create a working branch so the user doesn't edit upstream directly
+	headHash, _ := core.HashFromHex(head)
+	if !headHash.IsZero() {
+		workingBranch := createWorkingBranch(repo, branch, headHash)
+		config.WorkingBranch = workingBranch
+		saveLinkConfig(repo, &config)
 	}
 
 	return repo, nil

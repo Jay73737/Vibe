@@ -203,11 +203,11 @@ func (s *Server) handleRefs(w http.ResponseWriter, r *http.Request) {
 		if e.IsDir() {
 			continue
 		}
-		data, err := os.ReadFile(filepath.Join(refsDir, e.Name()))
+		meta, err := s.Repo.ReadBranchMeta(e.Name())
 		if err != nil {
 			continue
 		}
-		refs[e.Name()] = strings.TrimSpace(string(data))
+		refs[e.Name()] = meta.Head.String()
 	}
 	writeJSON(w, map[string]interface{}{"refs": refs})
 }

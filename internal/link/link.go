@@ -7,16 +7,18 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/vibe-vcs/vibe/internal/core"
 )
 
 // LinkConfig stores the connection between a linked repo and its source.
 type LinkConfig struct {
-	Source     string `json:"source"`      // local path or URL
-	SourceType string `json:"source_type"` // "local" or "remote"
-	Branch     string `json:"branch"`      // branch to track
-	Token      string `json:"token,omitempty"` // auth token for remote servers
+	Source        string `json:"source"`                  // local path or URL
+	SourceType    string `json:"source_type"`             // "local" or "remote"
+	Branch        string `json:"branch"`                  // upstream branch to track
+	Token         string `json:"token,omitempty"`         // auth token for remote servers
+	WorkingBranch string `json:"working_branch,omitempty"` // user's local working branch
 }
 
 // Manager handles repo linking and syncing.
@@ -93,10 +95,6 @@ func Link(targetDir, source string) (*core.Repo, error) {
 		return repo, nil
 	}
 
-	// Point our HEAD to the same branch
-	headPath := filepath.Join(repo.VibeDir, "HEAD")
-	os.WriteFile(headPath, []byte("ref: refs/branches/"+sourceBranch+"\n"), 0644)
-
 	// Create manifest of files (directory structure) without writing contents
 	commit, err := sourceRepo.Store.ReadCommit(sourceHead)
 	if err != nil {
@@ -124,6 +122,11 @@ func Link(targetDir, source string) (*core.Repo, error) {
 		dir := filepath.Dir(filepath.Join(repo.WorkDir, filepath.FromSlash(name)))
 		os.MkdirAll(dir, 0755)
 	}
+
+	// Create a working branch so the user doesn't edit upstream directly
+	workingBranch := createWorkingBranch(repo, sourceBranch, sourceHead)
+	config.WorkingBranch = workingBranch
+	saveLinkConfig(repo, &config)
 
 	return repo, nil
 }
@@ -341,6 +344,39 @@ func loadManifest(repo *core.Repo) (*FileManifest, error) {
 		return nil, err
 	}
 	return &manifest, nil
+}
+
+// createWorkingBranch creates a local working branch forked from an upstream branch
+// so the user doesn't edit upstream directly. Returns the working branch name.
+func createWorkingBranch(repo *core.Repo, upstreamBranch string, headHash core.Hash) string {
+	author := os.Getenv("VIBE_AUTHOR")
+	if author == "" {
+		author = os.Getenv("USERNAME")
+	}
+	if author == "" {
+		author = os.Getenv("USER")
+	}
+	if author == "" {
+		author = "local"
+	}
+
+	workingName := author + "-working"
+
+	meta := &core.BranchMeta{
+		Head:        headHash,
+		Parent:      upstreamBranch,
+		ForkPoint:   headHash,
+		Author:      author,
+		Description: fmt.Sprintf("Working branch linked from %s", upstreamBranch),
+		CreatedAt:   time.Now().UTC(),
+	}
+	repo.WriteBranchMeta(workingName, meta)
+
+	// Point HEAD to the working branch
+	headPath := filepath.Join(repo.VibeDir, "HEAD")
+	os.WriteFile(headPath, []byte("ref: refs/branches/"+workingName+"\n"), 0644)
+
+	return workingName
 }
 
 // syncObjects copies all objects from source to target that target doesn't have.

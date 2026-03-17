@@ -59,6 +59,8 @@ func main() {
 		cmdSwitch()
 	case "destroy":
 		cmdDestroy()
+	case "merge":
+		cmdMerge()
 	case "sessions":
 		cmdSessions()
 	case "restore":
@@ -128,9 +130,10 @@ Core:
   config                Set author name (vibe config author "Your Name")
 
 Branching & Sessions:
-  branch <name>         Create a new branch
-  branches              List all branches
+  branch <name>         Create a new branch (tracks parent branch)
+  branches              List all branches (shows lineage)
   switch <name>         Switch branch (auto-saves your work)
+  merge <branch>        Merge another branch into current branch
   destroy <name>        Delete a branch and its sessions
   sessions              List saved sessions
   restore <id>          Restore a saved session
@@ -145,10 +148,10 @@ Import:
   import <git-url>      Clone a git repo and convert to Vibe
 
 Linking & Sync:
-  link <source> [dir]   Link to a repo (local path or URL)
+  link <source> [dir]   Link to a repo (auto-creates working branch)
   fetch <file>          Fetch a file from source on-demand
   pull                  Fetch all files from source
-  sync                  Pull latest changes from source
+  sync                  Pull latest refs from source (safe, won't overwrite)
 
 Roles:
   roles                 List users (use 'roles init <name>' to set up)
@@ -676,10 +679,15 @@ func cmdBranches() {
 		os.Exit(1)
 	}
 	for _, b := range branches {
+		meta, _ := repo.ReadBranchMeta(b)
+		suffix := ""
+		if meta != nil && meta.Parent != "" {
+			suffix = fmt.Sprintf(" \033[90m(from %s)\033[0m", meta.Parent)
+		}
 		if b == current {
-			fmt.Printf("* \033[32m%s\033[0m\n", b)
+			fmt.Printf("* \033[32m%s\033[0m%s\n", b, suffix)
 		} else {
-			fmt.Printf("  %s\n", b)
+			fmt.Printf("  %s%s\n", b, suffix)
 		}
 	}
 }
@@ -734,6 +742,48 @@ func cmdDestroy() {
 	fmt.Printf("Destroyed branch '%s'\n", os.Args[2])
 }
 
+func cmdMerge() {
+	if len(os.Args) < 3 {
+		fmt.Fprintln(os.Stderr, `usage: vibe merge <branch>
+
+Merges another branch into your current branch using three-way merge.
+Files you changed are kept. Files only the other branch changed are pulled in.
+If both sides changed a file, your version is kept and a warning is shown.
+
+Examples:
+  vibe merge main           Pull latest main into your working branch
+  vibe merge feature-auth   Merge a feature branch into current`)
+		os.Exit(1)
+	}
+
+	repo, err := core.FindRepo(".")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+
+	sourceBranch := os.Args[2]
+	currentBranch, _, _ := repo.Head()
+
+	mgr := branch.NewManager(repo)
+	commitHash, conflicts, err := mgr.Merge(sourceBranch, getAuthor())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+
+	auditCLI(repo, "merge", fmt.Sprintf("source=%s into=%s commit=%s", sourceBranch, currentBranch, commitHash.Short()))
+
+	if len(conflicts) > 0 {
+		fmt.Printf("Merged '%s' into '%s' [%s] with %d conflict(s):\n", sourceBranch, currentBranch, commitHash.Short(), len(conflicts))
+		for _, c := range conflicts {
+			fmt.Printf("  \033[33mCONFLICT\033[0m %s (kept your version)\n", c)
+		}
+	} else {
+		fmt.Printf("Merged '%s' into '%s' [%s]\n", sourceBranch, currentBranch, commitHash.Short())
+	}
+}
+
 func cmdSessions() {
 	repo, err := core.FindRepo(".")
 	if err != nil {
@@ -763,9 +813,11 @@ func cmdSessions() {
 
 	for _, s := range sessions {
 		fmt.Printf("\033[33m%s\033[0m\n", s.ID)
-		fmt.Printf("  Branch: %s\n", s.Branch)
-		fmt.Printf("  Date:   %s\n", s.Timestamp.Format("Mon Jan 2 15:04:05 2006"))
-		fmt.Printf("  Files:  %d staged, %d modified\n", len(s.Index), len(s.WorkingFiles))
+		fmt.Printf("  %s\n", s.Message)
+		fmt.Printf("  Branch: %s  |  %s  |  %d staged, %d modified\n",
+			s.Branch,
+			s.Timestamp.Format("Jan 2 15:04"),
+			len(s.Index), len(s.WorkingFiles))
 		fmt.Println()
 	}
 }
@@ -1131,6 +1183,10 @@ func cmdLink() {
 	config, manifest, _ := mgr.Status()
 
 	fmt.Printf("Linked to %s (%s)\n", config.Source, config.SourceType)
+	if config.WorkingBranch != "" {
+		fmt.Printf("  Working branch: %s (upstream: %s)\n", config.WorkingBranch, config.Branch)
+		fmt.Println("  Your changes stay on your branch. Use 'vibe merge main' to pull in updates.")
+	}
 	if manifest != nil {
 		cached := 0
 		for _, f := range manifest.Files {

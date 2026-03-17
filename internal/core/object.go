@@ -67,7 +67,8 @@ type Tree struct {
 // Commit represents a single point-in-time snapshot of the repository.
 type Commit struct {
 	TreeHash    Hash      `json:"tree"`
-	ParentHash  Hash      `json:"parent,omitempty"` // zero hash for initial commit
+	ParentHash  Hash      `json:"parent,omitempty"`       // zero hash for initial commit
+	MergeParent Hash      `json:"merge_parent,omitempty"` // second parent for merge commits
 	Author      string    `json:"author"`
 	Message     string    `json:"message"`
 	Timestamp   time.Time `json:"timestamp"`
