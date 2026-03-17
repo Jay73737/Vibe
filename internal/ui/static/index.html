@@ -308,10 +308,19 @@
         function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
 
         // WebSocket
-        function connectWS() {
-            const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-            const url = proto + '//' + location.host + '/ws' + (TOKEN ? '?token=' + TOKEN : '');
-            const ws = new WebSocket(url);
+        async function connectWS() {
+            // Fetch the real WS URL from the proxy (includes auth token)
+            let wsURL;
+            try {
+                const resp = await fetch(BASE + '/ws', { headers: apiHeaders() });
+                const data = await resp.json();
+                wsURL = data.ws_url;
+            } catch(e) {
+                // Fallback: connect directly
+                const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+                wsURL = proto + '//' + location.host + '/ws' + (TOKEN ? '?token=' + TOKEN : '');
+            }
+            const ws = new WebSocket(wsURL);
             const dot = document.getElementById('ws-dot');
             const status = document.getElementById('ws-status');
 

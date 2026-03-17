@@ -1213,6 +1213,7 @@ func cmdRevoke() {
 func cmdUI() {
 	port := 7434
 	serverURL := "http://localhost:7433"
+	token := ""
 
 	for i := 2; i < len(os.Args); i++ {
 		switch os.Args[i] {
@@ -1226,10 +1227,15 @@ func cmdUI() {
 				serverURL = os.Args[i+1]
 				i++
 			}
+		case "--token":
+			if i+1 < len(os.Args) {
+				token = os.Args[i+1]
+				i++
+			}
 		}
 	}
 
-	if err := ui.Serve(port, serverURL); err != nil {
+	if err := ui.Serve(port, serverURL, token); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}

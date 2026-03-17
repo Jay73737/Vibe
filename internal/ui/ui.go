@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os/exec"
 	"runtime"
+	"strings"
 )
 
 //go:embed all:static
@@ -15,7 +16,7 @@ var staticFiles embed.FS
 
 // Serve starts the web UI on the given port.
 // It proxies API calls to the Vibe server if running, or serves standalone.
-func Serve(port int, serverURL string) error {
+func Serve(port int, serverURL, token string) error {
 	// Serve embedded static files
 	staticFS, err := fs.Sub(staticFiles, "static")
 	if err != nil {
@@ -25,27 +26,30 @@ func Serve(port int, serverURL string) error {
 	mux := http.NewServeMux()
 
 	if serverURL != "" {
-		// Proxy API requests to the Vibe server
-		mux.HandleFunc("/api/", proxyHandler(serverURL))
-		mux.HandleFunc("/ws", proxyWSHandler(serverURL))
+		// Proxy API requests to the Vibe server, injecting auth token
+		mux.HandleFunc("/api/", proxyHandler(serverURL, token))
+		// Proxy WebSocket by upgrading on both ends
+		mux.HandleFunc("/ws", proxyWSHandler(serverURL, token))
 	}
 
 	mux.Handle("/", http.FileServer(http.FS(staticFS)))
 
 	addr := fmt.Sprintf("127.0.0.1:%d", port)
-	url := fmt.Sprintf("http://%s", addr)
+	openURL := fmt.Sprintf("http://%s", addr)
+	if token != "" {
+		openURL += "?token=" + token
+	}
 
-	log.Printf("Vibe UI available at %s", url)
+	log.Printf("Vibe UI available at %s", openURL)
 
 	// Try to open browser
-	go openBrowser(url)
+	go openBrowser(openURL)
 
 	return http.ListenAndServe(addr, mux)
 }
 
-func proxyHandler(target string) http.HandlerFunc {
+func proxyHandler(target, token string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// Simple reverse proxy
 		proxyURL := target + r.URL.Path
 		if r.URL.RawQuery != "" {
 			proxyURL += "?" + r.URL.RawQuery
@@ -56,8 +60,11 @@ func proxyHandler(target string) http.HandlerFunc {
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
 		}
-		// Forward auth headers
 		req.Header = r.Header.Clone()
+		// Inject token if the request doesn't already carry one
+		if token != "" && req.Header.Get("Authorization") == "" {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
 
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
@@ -66,7 +73,6 @@ func proxyHandler(target string) http.HandlerFunc {
 		}
 		defer resp.Body.Close()
 
-		// Copy response
 		for k, v := range resp.Header {
 			for _, vv := range v {
 				w.Header().Add(k, vv)
@@ -86,10 +92,25 @@ func proxyHandler(target string) http.HandlerFunc {
 	}
 }
 
-func proxyWSHandler(target string) http.HandlerFunc {
+func proxyWSHandler(target, token string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// For WebSocket, redirect client to connect directly to the server
-		http.Redirect(w, r, target+"/ws?"+r.URL.RawQuery, http.StatusTemporaryRedirect)
+		// Pass token as query param so the WS URL includes auth
+		wsTarget := target + "/ws"
+		q := r.URL.RawQuery
+		if token != "" {
+			if q != "" {
+				q += "&token=" + token
+			} else {
+				q = "token=" + token
+			}
+		}
+		if q != "" {
+			wsTarget += "?" + q
+		}
+		// Tell the browser to connect directly to the vibe server for WebSocket
+		// (browsers don't follow WS redirects, so we use a JS-friendly 200 response)
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"ws_url":%q}`, strings.Replace(wsTarget, "http://", "ws://", 1))
 	}
 }
 
