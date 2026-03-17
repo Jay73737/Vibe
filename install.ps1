@@ -213,6 +213,28 @@ if ($sourceDir -like "$env:TEMP*") {
     Remove-Item $sourceDir -Recurse -Force -ErrorAction SilentlyContinue
 }
 
+# ── Step 7: Install daemon service ──────────────────────────────────
+Write-Step "Installing vibe daemon as a startup service..."
+
+try {
+    & $dstExe service install 2>&1 | Out-Null
+    if ($LASTEXITCODE -eq 0) {
+        Write-Ok "Daemon service installed (runs at logon)."
+        & $dstExe service start 2>&1 | Out-Null
+        if ($LASTEXITCODE -eq 0) {
+            Write-Ok "Daemon service started."
+        } else {
+            Write-Warn "Could not start daemon now. It will start on next logon."
+        }
+    } else {
+        Write-Warn "Could not install daemon service automatically."
+        Write-Warn "You can install it manually later: vibe service install"
+    }
+} catch {
+    Write-Warn "Could not install daemon service: $_"
+    Write-Warn "You can install it manually later: vibe service install"
+}
+
 # ── Done ─────────────────────────────────────────────────────────────
 Write-Host ""
 Write-Host "  vibe is installed!" -ForegroundColor Green
@@ -228,4 +250,9 @@ Write-Host ""
 Write-Host "  Share with anyone:" -ForegroundColor White
 Write-Host "    vibe serve --tunnel" -ForegroundColor DarkGray
 Write-Host "    vibe invite <name>" -ForegroundColor DarkGray
+Write-Host ""
+Write-Host "  Background sync daemon:" -ForegroundColor White
+Write-Host "    vibe service status     Check daemon status" -ForegroundColor DarkGray
+Write-Host "    vibe service install    Install as startup service" -ForegroundColor DarkGray
+Write-Host "    vibe daemon             Run in foreground (debug)" -ForegroundColor DarkGray
 Write-Host ""

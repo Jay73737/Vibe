@@ -1,0 +1,11 @@
+name = "vibe-relay"
+main = "src/index.js"
+compatibility_date = "2024-01-01"
+
+# KV namespace for storing server entries
+# Run: wrangler kv namespace create RELAY_KV
+# Then paste the binding ID below
+[[kv_namespaces]]
+binding = "RELAY_KV"
+id = "c0957d44d6824cabade92c2794fcff96"
+

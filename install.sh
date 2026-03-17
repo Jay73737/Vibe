@@ -209,6 +209,21 @@ if [ "$CLEANUP_SOURCE" = true ]; then
     rm -rf "$SOURCE_DIR"
 fi
 
+# ── Step 7: Install daemon service ───────────────────────────────────
+step "Installing vibe daemon as a startup service..."
+
+if "$INSTALL_DIR/vibe" service install 2>/dev/null; then
+    ok "Daemon service installed."
+    if "$INSTALL_DIR/vibe" service start 2>/dev/null; then
+        ok "Daemon service started."
+    else
+        warn "Could not start daemon now. It will start on next login."
+    fi
+else
+    warn "Could not install daemon service automatically."
+    warn "You can install it manually later: vibe service install"
+fi
+
 # ── Done ─────────────────────────────────────────────────────────────
 echo ""
 printf '\033[32m  vibe is installed!\033[0m\n'
@@ -224,4 +239,9 @@ echo ""
 printf '\033[37m  Share with anyone:\033[0m\n'
 printf '\033[90m    vibe serve --tunnel\033[0m\n'
 printf '\033[90m    vibe invite <name>\033[0m\n'
+echo ""
+printf '\033[37m  Background sync daemon:\033[0m\n'
+printf '\033[90m    vibe service status     Check daemon status\033[0m\n'
+printf '\033[90m    vibe service install    Install as startup service\033[0m\n'
+printf '\033[90m    vibe daemon             Run in foreground (debug)\033[0m\n'
 echo ""

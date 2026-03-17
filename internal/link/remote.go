@@ -47,20 +47,38 @@ func (c *RemoteClient) get(path string) ([]byte, error) {
 	return io.ReadAll(resp.Body)
 }
 
-// GetInfo returns server repo info.
+// ServerInfo holds the response from /api/info.
+type ServerInfo struct {
+	Branch    string   `json:"branch"`
+	Head      string   `json:"head"`
+	TunnelURL string   `json:"tunnel_url,omitempty"`
+	ServerID  string   `json:"server_id,omitempty"`
+	LANURLs   []string `json:"lan_urls,omitempty"`
+	RelayURL   string   `json:"relay_url,omitempty"`
+	RelayToken string   `json:"relay_token,omitempty"`
+	Port      int      `json:"port,omitempty"`
+}
+
+// GetInfo returns server repo info including tunnel URL for re-discovery.
 func (c *RemoteClient) GetInfo() (branch string, head string, err error) {
-	data, err := c.get("/api/info")
+	info, err := c.GetServerInfo()
 	if err != nil {
 		return "", "", err
 	}
-	var info struct {
-		Branch string `json:"branch"`
-		Head   string `json:"head"`
-	}
-	if err := json.Unmarshal(data, &info); err != nil {
-		return "", "", err
-	}
 	return info.Branch, info.Head, nil
+}
+
+// GetServerInfo returns the full server info including tunnel URL.
+func (c *RemoteClient) GetServerInfo() (*ServerInfo, error) {
+	data, err := c.get("/api/info")
+	if err != nil {
+		return nil, err
+	}
+	var info ServerInfo
+	if err := json.Unmarshal(data, &info); err != nil {
+		return nil, err
+	}
+	return &info, nil
 }
 
 // GetRefs returns all branch refs from the server.
@@ -114,11 +132,13 @@ func (c *RemoteClient) GetBlob(hashStr string) ([]byte, error) {
 func LinkRemote(targetDir, serverURL, token string) (*core.Repo, error) {
 	client := NewRemoteClient(serverURL, token)
 
-	// Verify server is reachable
-	branch, head, err := client.GetInfo()
+	// Verify server is reachable and get full server info
+	info, err := client.GetServerInfo()
 	if err != nil {
 		return nil, fmt.Errorf("cannot reach server: %w", err)
 	}
+	branch := info.Branch
+	head := info.Head
 
 	// Initialize target repo
 	absTarget, err := filepath.Abs(targetDir)
@@ -135,12 +155,33 @@ func LinkRemote(targetDir, serverURL, token string) (*core.Repo, error) {
 		}
 	}
 
+	// Build fallback URLs: store every alternate way to reach this server
+	// so the daemon can re-discover if the tunnel URL changes on restart.
+	var fallbacks []string
+	if info.TunnelURL != "" && info.TunnelURL != serverURL {
+		fallbacks = append(fallbacks, info.TunnelURL)
+	}
+	// If linking via tunnel, keep the original URL as a fallback too
+	if strings.Contains(serverURL, "trycloudflare.com") {
+		fallbacks = append(fallbacks, serverURL)
+	}
+	// Store all LAN URLs the server reports — these are stable across restarts
+	// and let the daemon reach the server to discover the new tunnel URL.
+	for _, lanURL := range info.LANURLs {
+		if lanURL != serverURL {
+			fallbacks = append(fallbacks, lanURL)
+		}
+	}
 	// Save link config
 	config := LinkConfig{
-		Source:     serverURL,
-		SourceType: "remote",
-		Branch:     branch,
-		Token:      token,
+		Source:       serverURL,
+		SourceType:   "remote",
+		Branch:       branch,
+		Token:        token,
+		FallbackURLs: fallbacks,
+		RelayURL:     info.RelayURL,
+		RelayToken:   info.RelayToken,
+		ServerID:     info.ServerID,
 	}
 	if err := saveLinkConfig(repo, &config); err != nil {
 		return nil, err

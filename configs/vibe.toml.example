@@ -1,0 +1,19 @@
+host = "0.0.0.0"
+port = 7433
+repo_path = "."
+
+[tunnel]
+enabled = true
+# name = "my-stable-tunnel"  # optional: named tunnel for stable URL
+
+[relay]
+url = ""      # your Cloudflare Worker URL, e.g. https://vibe-relay.yourname.workers.dev
+token = ""    # same token you set in wrangler.toml / RELAY_TOKEN
+
+[auth]
+token = ""    # shared secret for clients connecting to this server
+
+[tls]
+enabled = false
+cert_file = ""
+key_file = ""

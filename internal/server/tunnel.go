@@ -38,9 +38,13 @@ func ReadTunnelURL(vibeDir string) string {
 	return strings.TrimSpace(string(data))
 }
 
-// StartTunnel launches `cloudflared tunnel --url http://localhost:<port>` and
-// blocks until the public URL is captured or the timeout expires.
-func StartTunnel(port int, vibeDir string) (*Tunnel, error) {
+// StartTunnel launches a cloudflared tunnel and blocks until the public URL
+// is captured or the timeout expires.
+//
+// If tunnelName is empty, a free ephemeral quick-tunnel is used (random URL).
+// If tunnelName is provided, a named tunnel is used for a stable URL across
+// restarts (requires prior `cloudflared tunnel create <name>` and DNS setup).
+func StartTunnel(port int, vibeDir string, tunnelName string) (*Tunnel, error) {
 	// Check that cloudflared is installed
 	path, err := exec.LookPath("cloudflared")
 	if err != nil {
@@ -48,7 +52,15 @@ func StartTunnel(port int, vibeDir string) (*Tunnel, error) {
 	}
 
 	localURL := fmt.Sprintf("http://localhost:%d", port)
-	cmd := exec.Command(path, "tunnel", "--url", localURL)
+
+	var cmd *exec.Cmd
+	if tunnelName != "" {
+		// Named tunnel: stable URL, requires prior setup
+		cmd = exec.Command(path, "tunnel", "run", "--url", localURL, tunnelName)
+	} else {
+		// Quick tunnel: free, random URL
+		cmd = exec.Command(path, "tunnel", "--url", localURL)
+	}
 
 	// cloudflared prints the public URL to stderr
 	stderr, err := cmd.StderrPipe()

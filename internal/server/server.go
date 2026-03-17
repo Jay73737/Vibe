@@ -37,7 +37,7 @@ func New(cfg *Config) (*Server, error) {
 		Repo:    repo,
 		Hub:     NewHub(),
 		Audit:   core.NewAuditLog(repo.VibeDir),
-		Limiter: NewRateLimiter(100, time.Minute), // 100 requests/min per IP
+		Limiter: NewRateLimiter(1000, time.Minute), // 1000 requests/min per IP
 	}
 	// Check if roles are configured
 	rm := roles.NewManager(repo.VibeDir)
@@ -79,7 +79,7 @@ func (s *Server) ListenAndServe() error {
 	log.Printf("Vibe server listening on %s", addr)
 	log.Printf("Serving repo: %s", s.Repo.WorkDir)
 	log.Printf("WebSocket endpoint: ws://%s/ws", addr)
-	log.Printf("Rate limiting: 100 requests/min per IP")
+	log.Printf("Rate limiting: 1000 requests/min per IP")
 
 	srv := &http.Server{Handler: handler}
 	if s.Config.TLS.Enabled {
@@ -106,6 +106,7 @@ func (s *Server) buildHandler() http.Handler {
 	mux.HandleFunc("/api/manifest", rl(s.authMiddleware(s.handleManifest)))
 	mux.HandleFunc("/api/push", rl(s.authMiddleware(s.writeMiddleware(s.handlePush))))
 	mux.HandleFunc("/api/roles", rl(s.authMiddleware(s.handleRoles)))
+	mux.HandleFunc("/api/shutdown", rl(s.authMiddleware(s.writeMiddleware(s.handleShutdown))))
 	mux.HandleFunc("/ws", s.authMiddleware(s.handleWebSocket)) // no rate limit on WS
 	return mux
 }
@@ -179,15 +180,69 @@ func (s *Server) writeMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// GET /api/info - repo metadata
+// GET /api/info - repo metadata (includes tunnel URL + LAN addresses for re-discovery)
 func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
 	branch, headHash, _ := s.Repo.Head()
 	info := map[string]interface{}{
-		"branch":  branch,
-		"head":    headHash.String(),
-		"clients": s.Hub.ClientCount(),
+		"branch":    branch,
+		"head":      headHash.String(),
+		"clients":   s.Hub.ClientCount(),
+		"server_id": s.ServerID(),
+		"port":      s.Config.Port,
+	}
+	if tunnelURL := ReadTunnelURL(s.Repo.VibeDir); tunnelURL != "" {
+		info["tunnel_url"] = tunnelURL
+	}
+	// Include LAN addresses so clients can store them as fallbacks
+	if addrs := GetLANAddresses(s.Config.Port); len(addrs) > 0 {
+		info["lan_urls"] = addrs
+	}
+	// Include relay URL and per-repo token so clients can discover tunnel URLs.
+	// The relay token is safe to share here because /api/info is auth-protected.
+	relayURL := s.Config.Relay.URL
+	if relayURL == "" {
+		relayURL = GetDefaultRelayURL()
+	}
+	if relayURL != "" {
+		info["relay_url"] = relayURL
+	}
+	if s.Config.Relay.Token != "" {
+		info["relay_token"] = s.Config.Relay.Token
 	}
 	writeJSON(w, info)
+}
+
+// ServerID returns a stable identifier for this server's repo.
+// Uses the first commit hash (immutable) or falls back to the work dir.
+func (s *Server) ServerID() string {
+	// Walk commit chain to find the root commit for a stable ID
+	_, headHash, err := s.Repo.Head()
+	if err == nil && !headHash.IsZero() {
+		h := headHash
+		for {
+			commit, err := s.Repo.Store.ReadCommit(h)
+			if err != nil || commit.ParentHash.IsZero() {
+				return h.String()[:16]
+			}
+			h = commit.ParentHash
+		}
+	}
+	return s.Repo.WorkDir
+}
+
+// GetLANAddresses returns http://ip:port URLs for all non-loopback IPv4 addresses.
+func GetLANAddresses(port int) []string {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return nil
+	}
+	var urls []string
+	for _, addr := range addrs {
+		if ipnet, ok := addr.(*net.IPNet); ok && !ipnet.IP.IsLoopback() && ipnet.IP.To4() != nil {
+			urls = append(urls, fmt.Sprintf("http://%s:%d", ipnet.IP.String(), port))
+		}
+	}
+	return urls
 }
 
 // GET /api/refs - list all branch refs
@@ -399,13 +454,17 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	client := s.Hub.Register(conn)
 	log.Printf("Client connected (total: %d)", s.Hub.ClientCount())
 
-	// Send initial state
+	// Send initial state (includes tunnel URL for re-discovery)
 	branch, headHash, _ := s.Repo.Head()
+	tunnelURL := ReadTunnelURL(s.Repo.VibeDir)
 	welcome := &Event{
 		Type:    "connected",
 		Branch:  branch,
 		Hash:    headHash.String(),
 		Message: "Connected to Vibe server",
+	}
+	if tunnelURL != "" {
+		welcome.Data = map[string]string{"tunnel_url": tunnelURL}
 	}
 	data, _ := json.Marshal(welcome)
 	client.send <- data
@@ -442,6 +501,37 @@ func (s *Server) handleRoles(w http.ResponseWriter, r *http.Request) {
 		users = append(users, ui)
 	}
 	writeJSON(w, map[string]interface{}{"owner": rf.Owner, "users": users})
+}
+
+// BroadcastTunnelUpdate notifies all connected WebSocket clients of a new tunnel URL.
+// Clients use this to update their stored server URL automatically.
+func (s *Server) BroadcastTunnelUpdate(tunnelURL string) {
+	s.Hub.Broadcast(&Event{
+		Type:    "tunnel_update",
+		Message: "Server tunnel URL changed",
+		Data:    map[string]string{"tunnel_url": tunnelURL},
+	})
+	log.Printf("Broadcast tunnel_update to %d client(s): %s", s.Hub.ClientCount(), tunnelURL)
+}
+
+// POST /api/shutdown — broadcasts a repo_shutdown warning to all clients, then signals the server to stop.
+// Requires write permission. Grace period (seconds) can be passed as ?grace=30.
+func (s *Server) handleShutdown(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+	grace := 30
+	if v := r.URL.Query().Get("grace"); v != "" {
+		fmt.Sscanf(v, "%d", &grace)
+	}
+	s.Hub.Broadcast(&Event{
+		Type:    "repo_shutdown",
+		Message: fmt.Sprintf("This repo is being deleted. You have %d seconds to save a copy.", grace),
+		Data:    map[string]int{"grace_seconds": grace},
+	})
+	log.Printf("Broadcast repo_shutdown to %d client(s), grace=%ds", s.Hub.ClientCount(), grace)
+	writeJSON(w, map[string]interface{}{"status": "broadcast_sent", "grace_seconds": grace, "clients": s.Hub.ClientCount()})
 }
 
 func writeJSON(w http.ResponseWriter, v interface{}) {

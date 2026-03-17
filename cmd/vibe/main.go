@@ -1,9 +1,12 @@
 package main
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,8 +15,10 @@ import (
 
 	"github.com/vibe-vcs/vibe/internal/branch"
 	"github.com/vibe-vcs/vibe/internal/core"
+	"github.com/vibe-vcs/vibe/internal/daemon"
 	"github.com/vibe-vcs/vibe/internal/history"
 	"github.com/vibe-vcs/vibe/internal/link"
+	vibeRelay "github.com/vibe-vcs/vibe/internal/relay"
 	"github.com/vibe-vcs/vibe/internal/roles"
 	"github.com/vibe-vcs/vibe/internal/server"
 	"github.com/vibe-vcs/vibe/internal/ui"
@@ -84,6 +89,11 @@ func main() {
 		cmdPull()
 	case "sync":
 		cmdSync()
+	// Daemon & Service
+	case "daemon":
+		cmdDaemon()
+	case "service":
+		cmdService()
 	// Roles
 	case "roles":
 		cmdRoles()
@@ -94,6 +104,10 @@ func main() {
 	// Server
 	case "serve":
 		cmdServe()
+	case "uninit":
+		cmdUninit()
+	case "relay":
+		cmdRelay()
 	case "ui":
 		cmdUI()
 	// Audit
@@ -148,10 +162,10 @@ Import:
   import <git-url>      Clone a git repo and convert to Vibe
 
 Linking & Sync:
-  link <source> [dir]   Link to a repo (auto-creates working branch)
+  link <source> [dir]   Link to a repo (auto-creates working branch, registers with daemon)
   fetch <file>          Fetch a file from source on-demand
   pull                  Fetch all files from source
-  sync                  Pull latest refs from source (safe, won't overwrite)
+  sync                  Pull latest refs from source (one-shot, prefer daemon for auto-sync)
 
 Roles:
   roles                 List users (use 'roles init <name>' to set up)
@@ -159,8 +173,17 @@ Roles:
   revoke <user>         Remove access
 
 Server:
-  serve                 Start server (--port, --token, --tunnel, --config)
+  serve                 Start server (--port, --token, --tunnel, --relay, --config)
+  relay                 Start URL relay server (--port, --token, --data)
   ui                    Open web dashboard (--port, --server)
+
+Daemon & Service:
+  daemon                Run the sync daemon in foreground
+  service install       Install daemon as a startup service
+  service uninstall     Remove the startup service
+  service start         Start the daemon service
+  service stop          Stop the daemon service
+  service status        Check daemon service status
 
 Security:
   audit                 View audit log (-n 50, --all)
@@ -479,8 +502,128 @@ func cmdInit() {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
+
+	// Store default relay URL and generate a per-repo relay token.
+	// The token is unique to this repo — only users who link it get the token,
+	// so only they can discover (or publish) this repo's tunnel URL on the relay.
+	configPath := filepath.Join(repo.VibeDir, "config.json")
+	config := make(map[string]string)
+	if data, err := os.ReadFile(configPath); err == nil {
+		json.Unmarshal(data, &config)
+	}
+	relayURL := server.GetDefaultRelayURL()
+	if relayURL != "" {
+		config["relay_url"] = relayURL
+	}
+	// Generate a random per-repo token
+	tokenBytes := make([]byte, 32)
+	if _, err := rand.Read(tokenBytes); err == nil {
+		config["relay_token"] = hex.EncodeToString(tokenBytes)
+	}
+	data, _ := json.MarshalIndent(config, "", "  ")
+	os.WriteFile(configPath, data, 0644)
+
 	auditCLI(repo, "init", fmt.Sprintf("initialized repo at %s", repo.WorkDir))
 	fmt.Printf("Initialized empty vibe repository in %s\n", repo.VibeDir)
+}
+
+func cmdUninit() {
+	grace := 30
+	for i := 2; i < len(os.Args); i++ {
+		if os.Args[i] == "--grace" && i+1 < len(os.Args) {
+			fmt.Sscanf(os.Args[i+1], "%d", &grace)
+			i++
+		}
+	}
+
+	repo, err := core.FindRepo(".")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Confirm
+	fmt.Printf("This will permanently delete the vibe repo at %s\n", repo.VibeDir)
+	fmt.Print("Type 'yes' to continue: ")
+	var confirm string
+	fmt.Scanln(&confirm)
+	if confirm != "yes" {
+		fmt.Println("Aborted.")
+		return
+	}
+
+	// Read relay config
+	var relayURL, relayToken, serverID string
+	configPath := filepath.Join(repo.VibeDir, "config.json")
+	if data, err := os.ReadFile(configPath); err == nil {
+		var cfg map[string]string
+		if json.Unmarshal(data, &cfg) == nil {
+			relayURL = cfg["relay_url"]
+			relayToken = cfg["relay_token"]
+		}
+	}
+
+	// Broadcast shutdown warning to connected clients via the running server
+	port := 7433
+	serverToken := relayToken // use relay token as a fallback; real deployments set --token
+	shutdownURL := fmt.Sprintf("http://localhost:%d/api/shutdown?grace=%d", port, grace)
+	req, _ := http.NewRequest(http.MethodPost, shutdownURL, nil)
+	if serverToken != "" {
+		req.Header.Set("Authorization", "Bearer "+serverToken)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		fmt.Println("  Server not running locally — skipping broadcast.")
+	} else {
+		resp.Body.Close()
+		if resp.StatusCode == http.StatusOK {
+			fmt.Printf("  Broadcast repo_shutdown to connected clients. Waiting %ds...\n", grace)
+			time.Sleep(time.Duration(grace) * time.Second)
+		}
+	}
+
+	// Unpublish from relay
+	if relayURL != "" && relayToken != "" {
+		// Derive server ID from root commit (same logic as server.ServerID)
+		if id, err := getServerID(repo); err == nil {
+			serverID = id
+		}
+		if serverID != "" {
+			if err := vibeRelay.Unpublish(relayURL, serverID, relayToken); err != nil {
+				fmt.Fprintf(os.Stderr, "  relay unpublish warning: %v\n", err)
+			} else {
+				fmt.Printf("  Removed from relay: %s\n", relayURL)
+			}
+		}
+	}
+
+	// Delete the .vibe directory
+	if err := os.RemoveAll(repo.VibeDir); err != nil {
+		fmt.Fprintf(os.Stderr, "error deleting %s: %v\n", repo.VibeDir, err)
+		os.Exit(1)
+	}
+	fmt.Printf("Deleted %s\n", repo.VibeDir)
+}
+
+// getServerID derives the stable server ID from the root commit hash.
+func getServerID(repo *core.Repo) (string, error) {
+	_, headHash, err := repo.Head()
+	if err != nil || headHash.IsZero() {
+		return "", fmt.Errorf("no commits")
+	}
+	h := headHash
+	for {
+		commit, err := repo.Store.ReadCommit(h)
+		if err != nil || commit.ParentHash.IsZero() {
+			break
+		}
+		h = commit.ParentHash
+	}
+	s := h.String()
+	if len(s) > 16 {
+		return s[:16], nil
+	}
+	return s, nil
 }
 
 func cmdAdd() {
@@ -1119,6 +1262,22 @@ func cmdServe() {
 			}
 		case "--tunnel":
 			cfg.Tunnel.Enabled = true
+		case "--tunnel-name":
+			if i+1 < len(os.Args) {
+				cfg.Tunnel.Name = os.Args[i+1]
+				cfg.Tunnel.Enabled = true
+				i++
+			}
+		case "--relay":
+			if i+1 < len(os.Args) {
+				cfg.Relay.URL = os.Args[i+1]
+				i++
+			}
+		case "--relay-token":
+			if i+1 < len(os.Args) {
+				cfg.Relay.Token = os.Args[i+1]
+				i++
+			}
 		}
 	}
 
@@ -1128,15 +1287,63 @@ func cmdServe() {
 		os.Exit(1)
 	}
 
+	// Auto-fill relay config from repo's config.json if not set via flags/toml
+	if cfg.Relay.URL == "" || cfg.Relay.Token == "" {
+		repoConfigPath := filepath.Join(srv.Repo.VibeDir, "config.json")
+		if data, err := os.ReadFile(repoConfigPath); err == nil {
+			var repoConfig map[string]string
+			if json.Unmarshal(data, &repoConfig) == nil {
+				if cfg.Relay.URL == "" {
+					if u := repoConfig["relay_url"]; u != "" {
+						cfg.Relay.URL = u
+					}
+				}
+				if cfg.Relay.Token == "" {
+					if t := repoConfig["relay_token"]; t != "" {
+						cfg.Relay.Token = t
+					}
+				}
+			}
+		}
+	}
+
 	// Start cloudflared tunnel if requested
 	if cfg.Tunnel.Enabled {
-		tunnel, err := server.StartTunnel(cfg.Port, srv.Repo.VibeDir)
+		// Auto-use default relay when tunneling without explicit --relay
+		if cfg.Relay.URL == "" {
+			cfg.Relay.URL = server.GetDefaultRelayURL()
+		}
+		if cfg.Relay.Token == "" {
+			cfg.Relay.Token = server.GetDefaultRelayToken()
+		}
+
+		tunnel, err := server.StartTunnel(cfg.Port, srv.Repo.VibeDir, cfg.Tunnel.Name)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "tunnel error: %v\n", err)
 			os.Exit(1)
 		}
 		defer tunnel.Stop()
-		fmt.Printf("\n  Public URL: %s\n\n", tunnel.URL)
+		fmt.Printf("\n  Public URL: %s\n", tunnel.URL)
+		if cfg.Tunnel.Name != "" {
+			fmt.Printf("  Named tunnel: %s (stable URL across restarts)\n", cfg.Tunnel.Name)
+		} else {
+			fmt.Println("  Tip: use --tunnel-name <name> for a stable URL across restarts.")
+		}
+		fmt.Println()
+
+		// Publish to relay so clients can discover the new URL
+		if cfg.Relay.URL != "" {
+			serverID := srv.ServerID()
+			lanURLs := server.GetLANAddresses(cfg.Port)
+			if pubErr := vibeRelay.Publish(cfg.Relay.URL, serverID, tunnel.URL, cfg.Relay.Token, lanURLs); pubErr != nil {
+				fmt.Fprintf(os.Stderr, "  relay publish warning: %v\n", pubErr)
+			} else {
+				fmt.Printf("  Published to relay: %s (id: %s)\n", cfg.Relay.URL, serverID)
+			}
+		}
+
+		// Broadcast the new tunnel URL to any already-connected WebSocket clients
+		srv.BroadcastTunnelUpdate(tunnel.URL)
 	}
 
 	if err := srv.ListenAndServe(); err != nil {
@@ -1196,6 +1403,15 @@ func cmdLink() {
 		}
 		fmt.Printf("  %d files in manifest (%d cached)\n", len(manifest.Files), cached)
 		fmt.Println("  Run 'vibe pull' to fetch all files, or access them on-demand.")
+	}
+
+	// Register with daemon for automatic sync
+	absPath, _ := filepath.Abs(repo.WorkDir)
+	if regErr := daemon.RegisterRepo(absPath, config.Source, config.SourceType, config.Token, config.Branch, config.FallbackURLs, config.RelayURL, config.RelayToken, config.ServerID); regErr != nil {
+		fmt.Fprintf(os.Stderr, "  warning: could not register with daemon: %v\n", regErr)
+	} else {
+		fmt.Println("  Registered with vibe daemon for automatic sync.")
+		fmt.Println("  Run 'vibe service install && vibe service start' to enable background sync.")
 	}
 }
 
@@ -1257,6 +1473,119 @@ func cmdSync() {
 	} else {
 		fmt.Printf("Synced %d changed file(s) from source.\n", changed)
 		fmt.Println("Run 'vibe pull' to fetch updated contents.")
+	}
+}
+
+func cmdRelay() {
+	port := 7435
+	token := ""
+	dataDir := ""
+
+	for i := 2; i < len(os.Args); i++ {
+		switch os.Args[i] {
+		case "--port", "-p":
+			if i+1 < len(os.Args) {
+				fmt.Sscanf(os.Args[i+1], "%d", &port)
+				i++
+			}
+		case "--token":
+			if i+1 < len(os.Args) {
+				token = os.Args[i+1]
+				i++
+			}
+		case "--data":
+			if i+1 < len(os.Args) {
+				dataDir = os.Args[i+1]
+				i++
+			}
+		}
+	}
+
+	if dataDir == "" {
+		home, _ := os.UserHomeDir()
+		dataDir = filepath.Join(home, ".vibe", "relay")
+	}
+
+	r := vibeRelay.New(dataDir)
+	addr := fmt.Sprintf("0.0.0.0:%d", port)
+	if err := r.Serve(addr, token); err != nil {
+		fmt.Fprintf(os.Stderr, "relay error: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+// --- Daemon & Service commands ---
+
+func cmdDaemon() {
+	d, err := daemon.New()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	if err := d.Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "daemon error: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func cmdService() {
+	if len(os.Args) < 3 {
+		fmt.Fprintln(os.Stderr, `usage: vibe service <command>
+
+Commands:
+  install     Install the vibe daemon as a startup service
+  uninstall   Remove the startup service
+  start       Start the daemon service
+  stop        Stop the daemon service
+  status      Check whether the daemon is running`)
+		os.Exit(1)
+	}
+
+	switch os.Args[2] {
+	case "install":
+		if err := daemon.ServiceInstall(); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("Vibe daemon installed as a startup service.")
+		fmt.Println("Run 'vibe service start' to start it now.")
+	case "uninstall":
+		if err := daemon.ServiceUninstall(); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("Vibe daemon service removed.")
+	case "start":
+		if err := daemon.ServiceStart(); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("Vibe daemon started.")
+	case "stop":
+		if err := daemon.ServiceStop(); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("Vibe daemon stopped.")
+	case "status":
+		status, err := daemon.ServiceStatus()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("Vibe daemon: %s\n", status)
+
+		// Also show watched repos
+		reg, err := daemon.LoadRegistry()
+		if err == nil && len(reg.Repos) > 0 {
+			fmt.Printf("\nWatched repos (%d):\n", len(reg.Repos))
+			for _, r := range reg.Repos {
+				fmt.Printf("  %s <- %s (%s)\n", r.Path, r.Source, r.SourceType)
+			}
+		}
+	default:
+		fmt.Fprintf(os.Stderr, "unknown service command: %s\n", os.Args[2])
+		os.Exit(1)
 	}
 }
 

@@ -14,11 +14,25 @@ import (
 
 // LinkConfig stores the connection between a linked repo and its source.
 type LinkConfig struct {
-	Source        string `json:"source"`                  // local path or URL
-	SourceType    string `json:"source_type"`             // "local" or "remote"
-	Branch        string `json:"branch"`                  // upstream branch to track
-	Token         string `json:"token,omitempty"`         // auth token for remote servers
-	WorkingBranch string `json:"working_branch,omitempty"` // user's local working branch
+	Source        string   `json:"source"`                   // local path or URL
+	SourceType    string   `json:"source_type"`              // "local" or "remote"
+	Branch        string   `json:"branch"`                   // upstream branch to track
+	Token         string   `json:"token,omitempty"`          // auth token for remote servers
+	WorkingBranch string   `json:"working_branch,omitempty"` // user's local working branch
+	FallbackURLs  []string `json:"fallback_urls,omitempty"`  // alternate URLs to try if primary fails
+	RelayURL      string   `json:"relay_url,omitempty"`      // URL of relay server for tunnel re-discovery
+	RelayToken    string   `json:"relay_token,omitempty"`    // per-repo token for relay auth
+	ServerID      string   `json:"server_id,omitempty"`      // stable repo ID for relay lookups
+}
+
+// LoadLinkConfig loads the link config from a repo (exported for daemon use).
+func LoadLinkConfig(repo *core.Repo) (*LinkConfig, error) {
+	return loadLinkConfig(repo)
+}
+
+// SaveLinkConfig saves the link config to a repo (exported for daemon use).
+func SaveLinkConfig(repo *core.Repo, config *LinkConfig) error {
+	return saveLinkConfig(repo, config)
 }
 
 // Manager handles repo linking and syncing.
