@@ -4,7 +4,7 @@ set -euo pipefail
 # vibe installer - modern version control for the vibe coding era
 # Usage:
 #   ./install.sh
-#   curl -fsSL  https://github.com/Jay73737/Vibe/edit/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/Jay73737/Vibe/main/install.sh | bash
 
 GO_VERSION="${GO_VERSION:-1.24.1}"
 INSTALL_DIR="${INSTALL_DIR:-$HOME/.vibe/bin}"
