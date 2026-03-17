@@ -1,59 +1,80 @@
 # Vibe
 
-A modern, developer-friendly version control system built in Go. Vibe rethinks the Git workflow with instant repo linking, auto-saved sessions, built-in user roles, and a real-time web UI — all in a single binary.
+A modern, lightweight version control system built for the vibe coding era. Spin up branches instantly, experiment freely, nuke what doesn't work, and share your vibes with your team — all from a single binary under 15MB.
 
 ## Why Vibe?
 
-- **Link, don't clone.** Connect to any repo with `vibe link` — metadata syncs instantly, files fetch on-demand.
-- **Sessions, not stashes.** Switch branches and your work is automatically saved. Come back anytime with `vibe restore`.
-- **Built-in collaboration.** User roles (admin, contributor, reader) and token auth are first-class, not bolted on.
-- **Self-hosted in seconds.** `vibe serve` runs anywhere — your laptop, a VPS, a Docker container.
-- **Real-time push.** Connected clients get live updates over WebSocket when anyone pushes changes.
-- **CLI + Web UI.** Power users get a full CLI. Everyone else gets `vibe ui` — a browser-based dashboard.
+- **Vibe coding workflow.** `vibe vibe experiment` spins up a branch. `vibe save` commits everything. `vibe nuke` throws it away. No ceremony.
+- **Link, don't clone.** `vibe link` connects to any repo — metadata syncs instantly, files fetch on-demand.
+- **Sessions, not stashes.** Switch branches and your work is auto-saved. Come back anytime with `vibe restore`.
+- **Built-in collaboration.** User roles (admin, contributor, reader) and per-user tokens are first-class.
+- **Host anywhere.** `vibe serve` runs on your laptop, a Raspberry Pi, a VPS, or Docker. Lightweight enough for any machine.
+- **Real-time push.** Connected users get live updates over WebSocket when anyone pushes changes.
+- **CLI + Web UI.** Power users get a full CLI. Everyone else gets `vibe ui`.
 
 ## Quick Start
 
 ### Install from source
 
 ```bash
-# Requires Go 1.21+
 git clone https://github.com/Jay73737/Vibe.git
 cd Vibe
 go build -o vibe ./cmd/vibe/
 ```
 
-Move the `vibe` binary somewhere on your `$PATH`:
+Move the binary to your PATH:
 
 ```bash
 # Linux/macOS
 sudo mv vibe /usr/local/bin/
 
-# Windows — move vibe.exe to a directory in your PATH
+# Windows — move vibe.exe to a folder in your PATH
 ```
 
-### Create a repository
+### The vibe coding workflow
 
 ```bash
+# Set up
 mkdir my-project && cd my-project
 vibe init
+vibe config author "Your Name"
+
+# Create some files and save
+echo "hello world" > hello.txt
+vibe save "initial setup"
+
+# Start a vibe session — spin up a branch and switch to it
+vibe vibe experiment
+
+# Hack away...
+echo "wild idea" > experiment.txt
+vibe save "trying something"
+
+# Didn't work out? Nuke it.
+vibe nuke
+
+# Worked out? Switch back and keep it.
+vibe switch main
 ```
 
-### Basic workflow
+### Import from Git
 
 ```bash
-# Create files
-echo "hello world" > hello.txt
-
-# Stage and commit
-vibe add hello.txt
-vibe commit -m "Initial commit"
-
-# Check status and history
-vibe status
+vibe import https://github.com/someone/repo.git
+cd repo
 vibe log
 ```
 
 ## Commands
+
+### Quick Workflow
+
+| Command | Description |
+|---------|-------------|
+| `vibe vibe <name>` | Create a branch and switch to it in one shot |
+| `vibe save [message]` | Add all files + commit (like git add -A && git commit) |
+| `vibe nuke [name]` | Destroy a branch, switch back to main |
+| `vibe share <branch> <user>` | Share a branch with a connected user |
 
 ### Core
 
@@ -64,6 +85,7 @@ vibe log
 | `vibe commit -m "msg"` | Commit staged files |
 | `vibe status` | Show staged, modified, and untracked files |
 | `vibe log` | Show commit history |
+| `vibe config author "name"` | Set your author name |
 
 ### Branching & Sessions
 
@@ -71,11 +93,10 @@ vibe log
 |---------|-------------|
 | `vibe branch <name>` | Create a new branch |
 | `vibe branches` | List all branches |
-| `vibe switch <name>` | Switch branch (auto-saves current work as a session) |
+| `vibe switch <name>` | Switch branch (auto-saves your work as a session) |
 | `vibe switch <name> --no-session` | Switch without saving |
 | `vibe destroy <name>` | Delete a branch and its sessions |
 | `vibe sessions` | List all saved sessions |
-| `vibe sessions -b <branch>` | Filter sessions by branch |
 | `vibe restore <session-id>` | Restore a saved session |
 
 ### Version History
@@ -84,7 +105,7 @@ vibe log
 |---------|-------------|
 | `vibe diff` | Diff working tree vs last commit |
 | `vibe diff <hash1> <hash2>` | Diff between two commits |
-| `vibe revert <hash>` | Revert to any previous commit |
+| `vibe revert <hash>` | Revert to any previous commit (creates a revert commit) |
 | `vibe blame <file>` | Per-line authorship |
 
 ### Linking & Sync
@@ -93,9 +114,10 @@ vibe log
 |---------|-------------|
 | `vibe link <source> [dir]` | Link to a repo (local path or URL) |
 | `vibe link <url> [dir] --token <t>` | Link to a remote server with auth |
-| `vibe fetch <file>` | Fetch a single file from source |
+| `vibe fetch <file>` | Fetch a single file from source on-demand |
 | `vibe pull` | Fetch all files from source |
 | `vibe sync` | Pull latest changes from source |
+| `vibe import <git-url>` | Clone a git repo and convert to Vibe |
 
 ### Roles & Permissions
 
@@ -103,13 +125,13 @@ vibe log
 |---------|-------------|
 | `vibe roles init <name>` | Initialize roles (you become admin) |
 | `vibe roles` | List all users and roles |
-| `vibe grant <user> <role>` | Assign a role (`admin`, `contributor`, `reader`) |
+| `vibe grant <user> <role>` | Assign role: `admin`, `contributor`, or `reader` |
 | `vibe revoke <user>` | Remove a user's access |
 
 **Roles:**
-- **Admin** — Full control. Manage users, push, configure the repo.
+- **Admin** — Full control. Manage users, push, configure.
 - **Contributor** — Create branches, push changes.
-- **Reader** — Read-only access. Can link and browse, but not modify.
+- **Reader** — Read-only. Can link and browse, but not modify.
 
 ### Server
 
@@ -122,25 +144,41 @@ vibe log
 | `vibe ui` | Launch the web UI (default port 7434) |
 | `vibe ui --server http://host:7433` | Point UI at a remote server |
 
+## .vibeignore
+
+Create a `.vibeignore` file to exclude files from tracking (like `.gitignore`):
+
+```
+node_modules
+*.log
+.env
+dist
+.DS_Store
+```
+
 ## Hosting a Vibe Server
+
+Vibe servers are lightweight — they run on anything with a network connection. A Raspberry Pi, an old laptop, a $5 VPS, or localhost.
 
 ### Quick start (local)
 
 ```bash
 cd my-project
 vibe init
-vibe roles init myname
+vibe config author "yourname"
+vibe save "first commit"
+vibe roles init yourname
 vibe serve --port 7433
 ```
 
-Others can now connect:
+Others connect with:
 
 ```bash
 vibe link http://your-ip:7433 my-copy --token <their-token>
 vibe pull
 ```
 
-### With a config file
+### Config file
 
 Copy `configs/vibe-server.toml` and customize:
 
@@ -158,109 +196,71 @@ key_file = "/etc/ssl/key.pem"
 token = "shared-secret"
 ```
 
-```bash
-vibe serve --config my-server.toml
-```
-
-### With Docker
-
-```dockerfile
-FROM golang:1.21-alpine AS build
-WORKDIR /src
-COPY . .
-RUN go build -o /vibe ./cmd/vibe/
-
-FROM alpine:latest
-COPY --from=build /vibe /usr/local/bin/vibe
-EXPOSE 7433
-ENTRYPOINT ["vibe", "serve"]
-```
+### Docker
 
 ```bash
 docker build -t vibe-server .
-docker run -p 7433:7433 -v /path/to/repo:/repo vibe-server --repo /repo
+docker run -p 7433:7433 -v /path/to/repo:/repo vibe-server serve --port 7433
 ```
 
-### With systemd
+### systemd
 
-```ini
-# /etc/systemd/system/vibe.service
-[Unit]
-Description=Vibe VCS Server
-After=network.target
+Copy `configs/vibe.service` to `/etc/systemd/system/`:
 
-[Service]
-ExecStart=/usr/local/bin/vibe serve --config /etc/vibe/server.toml
-Restart=always
-User=vibe
-
-[Install]
-WantedBy=multi-user.target
+```bash
+sudo systemctl enable vibe
+sudo systemctl start vibe
 ```
 
 ## Web UI
 
-Run `vibe ui` to open the dashboard in your browser. It shows:
+`vibe ui` opens a browser dashboard showing:
 
 - Repository info (branch, HEAD, file count)
-- File browser with content hashes
-- Full commit history
+- File browser
+- Commit history
 - Branch list
 - User roles
-- Live event feed (real-time push notifications via WebSocket)
-
-Pass `--server http://host:port` to point it at a remote Vibe server.
+- Live event feed (real-time WebSocket notifications)
 
 ## How It Works
 
-Vibe uses a **content-addressable object store** (similar to Git) with SHA-256 hashing. Every file, directory tree, and commit is stored as an immutable object identified by its hash.
+Vibe uses a content-addressable object store with SHA-256 hashing. Every file, tree, and commit is an immutable object.
 
 ```
 .vibe/
-├── HEAD                    # Current branch pointer
-├── index                   # Staging area
-├── roles.json              # User roles and tokens
-├── objects/                # Content-addressable store
-│   ├── ab/cdef1234...      # Blob, tree, or commit objects
-│   └── ...
+├── HEAD              # Current branch pointer
+├── index             # Staging area
+├── config.json       # Local config (author, etc.)
+├── roles.json        # User roles and tokens
+├── link.json         # Link source config
+├── manifest.json     # Linked file manifest
+├── objects/          # Content-addressable store (blobs, trees, commits)
 └── refs/
-    ├── branches/           # Branch pointers
-    │   ├── main
-    │   └── feature
-    └── sessions/           # Auto-saved session snapshots
-        └── main/
-            └── main-1234567890.json
+    ├── branches/     # Branch pointers
+    └── sessions/     # Auto-saved session snapshots
 ```
 
-**Linking** uses a hybrid sync model: when you `vibe link`, the directory structure and metadata sync immediately. File contents are fetched on-demand when you access them, then cached locally. Run `vibe pull` to download everything at once.
+**Linking** uses hybrid sync: directory structure syncs immediately, file contents fetch on-demand and get cached locally.
 
 ## Cross-Platform Builds
 
-Vibe compiles to a single static binary. Build for any platform:
+Single static binary, no dependencies:
 
 ```bash
-# Linux
-GOOS=linux GOARCH=amd64 go build -o vibe-linux ./cmd/vibe/
-
-# macOS
-GOOS=darwin GOARCH=amd64 go build -o vibe-mac ./cmd/vibe/
-
-# Windows
-GOOS=windows GOARCH=amd64 go build -o vibe.exe ./cmd/vibe/
-
-# ARM (Raspberry Pi, etc.)
-GOOS=linux GOARCH=arm64 go build -o vibe-arm64 ./cmd/vibe/
+GOOS=linux   GOARCH=amd64 go build -o vibe-linux   ./cmd/vibe/
+GOOS=darwin  GOARCH=amd64 go build -o vibe-mac     ./cmd/vibe/
+GOOS=windows GOARCH=amd64 go build -o vibe.exe     ./cmd/vibe/
+GOOS=linux   GOARCH=arm64 go build -o vibe-arm64   ./cmd/vibe/
 ```
 
 ## Contributing
 
-Contributions are welcome! This project is open source.
-
 1. Fork the repo
-2. Create a branch (`vibe branch my-feature` or `git checkout -b my-feature`)
-3. Make your changes
-4. Run tests: `go test ./...`
-5. Submit a pull request
+2. `vibe vibe my-feature` (or `git checkout -b my-feature`)
+3. Make changes
+4. `go test ./...`
+5. Submit a PR
 
 ## License
 

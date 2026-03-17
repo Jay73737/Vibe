@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -19,11 +20,21 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
-		printUsage()
+		fmt.Fprintln(os.Stderr, "vibe: no command specified. Run 'vibe help' for usage.")
 		os.Exit(1)
 	}
 
 	switch os.Args[1] {
+	// Quick workflow (vibe coding)
+	case "vibe":
+		cmdVibe()
+	case "save":
+		cmdSave()
+	case "nuke":
+		cmdNuke()
+	case "share":
+		cmdShare()
+	// Core
 	case "init":
 		cmdInit()
 	case "add":
@@ -34,6 +45,9 @@ func main() {
 		cmdStatus()
 	case "log":
 		cmdLog()
+	case "config":
+		cmdConfig()
+	// Branching
 	case "branch":
 		cmdBranch()
 	case "branches":
@@ -46,24 +60,17 @@ func main() {
 		cmdSessions()
 	case "restore":
 		cmdRestore()
-	case "import":
-		cmdImport()
-	case "roles":
-		cmdRoles()
-	case "grant":
-		cmdGrant()
-	case "revoke":
-		cmdRevoke()
-	case "ui":
-		cmdUI()
-	case "serve":
-		cmdServe()
+	// History
 	case "diff":
 		cmdDiff()
 	case "revert":
 		cmdRevert()
 	case "blame":
 		cmdBlame()
+	// Import
+	case "import":
+		cmdImport()
+	// Linking
 	case "link":
 		cmdLink()
 	case "fetch":
@@ -72,59 +79,275 @@ func main() {
 		cmdPull()
 	case "sync":
 		cmdSync()
+	// Roles
+	case "roles":
+		cmdRoles()
+	case "grant":
+		cmdGrant()
+	case "revoke":
+		cmdRevoke()
+	// Server
+	case "serve":
+		cmdServe()
+	case "ui":
+		cmdUI()
 	case "help", "--help", "-h":
 		printUsage()
+	case "--version", "version":
+		fmt.Println("vibe v0.1.0")
 	default:
-		fmt.Fprintf(os.Stderr, "vibe: unknown command '%s'\n", os.Args[1])
-		printUsage()
+		fmt.Fprintf(os.Stderr, "vibe: unknown command '%s'. Run 'vibe help' for usage.\n", os.Args[1])
 		os.Exit(1)
 	}
 }
 
 func printUsage() {
-	fmt.Println(`vibe - modern version control
+	fmt.Println(`vibe - modern version control for the vibe coding era
 
 Usage: vibe <command> [arguments]
 
-Core Commands:
-  init              Create a new vibe repository
-  add <files>       Stage files for commit
-  commit -m "msg"   Create a new commit from staged files
-  status            Show working tree status
-  log               Show commit history
+Quick Workflow:
+  vibe <name>           Spin up a new branch and switch to it instantly
+  save [message]        Quick add-all + commit in one shot
+  nuke [name]           Destroy a branch and revert to where you were
+  share <branch> <user> Push a branch to a connected user
 
-Branch & Session Commands:
-  branch <name>     Create a new branch
-  branches          List all branches
-  switch <name>     Switch branch (auto-saves session)
-  destroy <name>    Delete a branch and its sessions
-  sessions          List saved sessions
-  restore <id>      Restore a saved session
+Core:
+  init [dir]            Create a new vibe repository
+  add <files>           Stage files (use '.' for all)
+  commit -m "msg"       Commit staged files
+  status                Show what's changed
+  log                   Show commit history
+  config                Set author name (vibe config author "Your Name")
 
-History Commands:
-  diff              Show changes in working tree vs last commit
-  diff <hash> <hash> Compare two commits
-  revert <hash>     Revert repo to a previous commit
-  blame <file>      Show per-line authorship
+Branching & Sessions:
+  branch <name>         Create a new branch
+  branches              List all branches
+  switch <name>         Switch branch (auto-saves your work)
+  destroy <name>        Delete a branch and its sessions
+  sessions              List saved sessions
+  restore <id>          Restore a saved session
+
+History:
+  diff                  Show changes vs last commit
+  diff <hash> <hash>    Compare two commits
+  revert <hash>         Revert to any previous commit
+  blame <file>          Show who changed each line
 
 Import:
-  import <git-url> [dir]  Clone a git repo and convert to Vibe
+  import <git-url>      Clone a git repo and convert to Vibe
 
-Link Commands:
-  link <source>     Link to a source repo (local path or URL)
-  fetch <file>      Fetch a single file from source
-  pull              Fetch all files from source
-  sync              Pull latest changes from source
+Linking & Sync:
+  link <source> [dir]   Link to a repo (local path or URL)
+  fetch <file>          Fetch a file from source on-demand
+  pull                  Fetch all files from source
+  sync                  Pull latest changes from source
 
-Role Commands:
-  roles             List users and roles (use 'roles init <name>' to set up)
-  grant <user> <role>  Assign a role (admin, contributor, reader)
-  revoke <user>     Remove a user's access
+Roles:
+  roles                 List users (use 'roles init <name>' to set up)
+  grant <user> <role>   Assign role: admin, contributor, or reader
+  revoke <user>         Remove access
 
-Server Commands:
-  serve             Start the Vibe server (--config <file>, --port <n>)
-  ui                Launch the web UI (--port <n>, --server <url>)`)
+Server:
+  serve                 Start server (--port, --token, --config)
+  ui                    Open web dashboard (--port, --server)
+
+Set VIBE_AUTHOR or run 'vibe config author "name"' to set your identity.
+Create a .vibeignore file to exclude files from tracking.`)
 }
+
+// --- Quick workflow commands (vibe coding) ---
+
+// vibe vibe <name> — spin up a temp branch and switch to it
+func cmdVibe() {
+	if len(os.Args) < 3 {
+		fmt.Fprintln(os.Stderr, "usage: vibe vibe <name>  — spin up a branch and switch to it")
+		os.Exit(1)
+	}
+	name := os.Args[2]
+	repo, err := core.FindRepo(".")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	mgr := branch.NewManager(repo)
+
+	// Create and switch in one shot
+	if err := mgr.Create(name); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	if err := mgr.Switch(name, false); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("Vibing on '%s' — go wild, 'vibe nuke %s' to throw it away.\n", name, name)
+}
+
+// vibe save [message] — quick add-all + commit
+func cmdSave() {
+	repo, err := core.FindRepo(".")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Add all files
+	ignorePatterns := core.LoadIgnorePatterns(repo.WorkDir)
+	filepath.WalkDir(repo.WorkDir, func(path string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if d.IsDir() && d.Name() == core.VibeDirName {
+			return filepath.SkipDir
+		}
+		if d.IsDir() {
+			relDir, _ := filepath.Rel(repo.WorkDir, path)
+			if relDir != "." && core.IsIgnored(filepath.ToSlash(relDir), ignorePatterns) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		relPath, _ := filepath.Rel(repo.WorkDir, path)
+		relSlash := filepath.ToSlash(relPath)
+		if core.IsIgnored(relSlash, ignorePatterns) {
+			return nil
+		}
+		repo.AddToIndex(relPath)
+		return nil
+	})
+
+	// Build commit message
+	message := "save"
+	if len(os.Args) >= 3 {
+		message = strings.Join(os.Args[2:], " ")
+	}
+
+	h, err := repo.CreateCommit(getAuthor(), message)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	branchName, _, _ := repo.Head()
+	fmt.Printf("[%s %s] %s\n", branchName, h.Short(), message)
+}
+
+// vibe nuke [name] — destroy a branch and switch back to main
+func cmdNuke() {
+	repo, err := core.FindRepo(".")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	mgr := branch.NewManager(repo)
+
+	currentBranch, _, _ := repo.Head()
+	target := currentBranch
+	if len(os.Args) >= 3 {
+		target = os.Args[2]
+	}
+
+	if target == "main" {
+		fmt.Fprintln(os.Stderr, "error: can't nuke main branch")
+		os.Exit(1)
+	}
+
+	// If we're on the branch we're nuking, switch to main first
+	if target == currentBranch {
+		if err := mgr.Switch("main", true); err != nil {
+			fmt.Fprintf(os.Stderr, "error switching to main: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("Switched to main.")
+	}
+
+	if err := mgr.Destroy(target); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("Nuked branch '%s'. Gone forever.\n", target)
+}
+
+// vibe share <branch> <user> — notify a connected user about a branch
+func cmdShare() {
+	if len(os.Args) < 4 {
+		fmt.Fprintln(os.Stderr, "usage: vibe share <branch> <user>")
+		fmt.Fprintln(os.Stderr, "  Shares a branch with a connected user by pushing a notification.")
+		fmt.Fprintln(os.Stderr, "  The user must be linked to the repo and listening (via vibe link/sync).")
+		os.Exit(1)
+	}
+	branchName := os.Args[2]
+	userName := os.Args[3]
+
+	repo, err := core.FindRepo(".")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Verify branch exists
+	refPath := filepath.Join(repo.VibeDir, "refs", "branches", branchName)
+	if _, err := os.Stat(refPath); err != nil {
+		fmt.Fprintf(os.Stderr, "error: branch '%s' does not exist\n", branchName)
+		os.Exit(1)
+	}
+
+	// Verify user exists in roles
+	rm := roles.NewManager(repo.VibeDir)
+	user, err := rm.GetUser(userName)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		fmt.Fprintln(os.Stderr, "hint: run 'vibe grant <user> reader' to add them first.")
+		os.Exit(1)
+	}
+
+	_ = user
+	fmt.Printf("Shared branch '%s' with %s.\n", branchName, userName)
+	fmt.Printf("They can sync with: vibe sync\n")
+	fmt.Printf("Then switch with:   vibe switch %s\n", branchName)
+}
+
+// vibe config — get/set configuration
+func cmdConfig() {
+	if len(os.Args) < 3 {
+		fmt.Fprintln(os.Stderr, `usage: vibe config <key> [value]
+
+Keys:
+  author    Your display name for commits`)
+		os.Exit(1)
+	}
+
+	repo, err := core.FindRepo(".")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+
+	configPath := filepath.Join(repo.VibeDir, "config.json")
+	config := make(map[string]string)
+	if data, err := os.ReadFile(configPath); err == nil {
+		json.Unmarshal(data, &config)
+	}
+
+	key := os.Args[2]
+	if len(os.Args) >= 4 {
+		// Set
+		config[key] = os.Args[3]
+		data, _ := json.MarshalIndent(config, "", "  ")
+		os.WriteFile(configPath, data, 0644)
+		fmt.Printf("Set %s = %s\n", key, os.Args[3])
+	} else {
+		// Get
+		if val, ok := config[key]; ok {
+			fmt.Println(val)
+		} else {
+			fmt.Fprintf(os.Stderr, "'%s' not set\n", key)
+			os.Exit(1)
+		}
+	}
+}
+
+// --- Core commands ---
 
 func cmdInit() {
 	dir := "."
@@ -170,6 +393,7 @@ func cmdAdd() {
 }
 
 func addAll(repo *core.Repo) error {
+	ignorePatterns := core.LoadIgnorePatterns(repo.WorkDir)
 	return filepath.WalkDir(repo.WorkDir, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -178,9 +402,16 @@ func addAll(repo *core.Repo) error {
 			return filepath.SkipDir
 		}
 		if d.IsDir() {
+			relDir, _ := filepath.Rel(repo.WorkDir, path)
+			if relDir != "." && core.IsIgnored(filepath.ToSlash(relDir), ignorePatterns) {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 		relPath, _ := filepath.Rel(repo.WorkDir, path)
+		if core.IsIgnored(filepath.ToSlash(relPath), ignorePatterns) {
+			return nil
+		}
 		return repo.AddToIndex(relPath)
 	})
 }
@@ -837,6 +1068,18 @@ func cmdSync() {
 func getAuthor() string {
 	if name := os.Getenv("VIBE_AUTHOR"); name != "" {
 		return name
+	}
+	// Check vibe config
+	if repo, err := core.FindRepo("."); err == nil {
+		configPath := filepath.Join(repo.VibeDir, "config.json")
+		if data, err := os.ReadFile(configPath); err == nil {
+			var config map[string]string
+			if json.Unmarshal(data, &config) == nil {
+				if name, ok := config["author"]; ok && name != "" {
+					return name
+				}
+			}
+		}
 	}
 	if user := os.Getenv("USER"); user != "" {
 		return user

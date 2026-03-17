@@ -38,16 +38,7 @@ func Link(targetDir, source string) (*core.Repo, error) {
 	}
 
 	if sourceType == "remote" {
-		token := ""
-		if len(os.Args) > 4 {
-			// Allow token as extra arg: vibe link <url> <dir> --token <token>
-			for i, arg := range os.Args {
-				if arg == "--token" && i+1 < len(os.Args) {
-					token = os.Args[i+1]
-				}
-			}
-		}
-		return LinkRemote(targetDir, source, token)
+		return nil, fmt.Errorf("use LinkRemote() for remote sources")
 	}
 
 	// Verify source is a vibe repo

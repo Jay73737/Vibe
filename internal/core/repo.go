@@ -1,6 +1,7 @@
 package core
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"io/fs"
@@ -11,6 +12,45 @@ import (
 )
 
 const VibeDirName = ".vibe"
+
+// LoadIgnorePatterns reads .vibeignore and returns patterns to skip.
+func LoadIgnorePatterns(workDir string) []string {
+	f, err := os.Open(filepath.Join(workDir, ".vibeignore"))
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+	var patterns []string
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		patterns = append(patterns, line)
+	}
+	return patterns
+}
+
+// IsIgnored checks if a path matches any ignore pattern.
+func IsIgnored(relPath string, patterns []string) bool {
+	relPath = filepath.ToSlash(relPath)
+	name := filepath.Base(relPath)
+	for _, p := range patterns {
+		// Match against full path or just filename
+		if matched, _ := filepath.Match(p, name); matched {
+			return true
+		}
+		if matched, _ := filepath.Match(p, relPath); matched {
+			return true
+		}
+		// Directory prefix match (e.g., "node_modules" matches "node_modules/foo.js")
+		if strings.HasPrefix(relPath, p+"/") || strings.HasPrefix(relPath, p+"\\") {
+			return true
+		}
+	}
+	return false
+}
 
 // Repo represents a Vibe repository.
 type Repo struct {
@@ -41,7 +81,7 @@ func FindRepo(startDir string) (*Repo, error) {
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			return nil, fmt.Errorf("not a vibe repository (or any parent up to root)")
+			return nil, fmt.Errorf("not a vibe repository (run 'vibe init' to create one)")
 		}
 		dir = parent
 	}
@@ -150,7 +190,14 @@ func (r *Repo) WriteIndex(idx *Index) error {
 
 // AddToIndex stages a file by hashing its content and adding it to the index.
 func (r *Repo) AddToIndex(relPath string) error {
-	absPath := filepath.Join(r.WorkDir, relPath)
+	absPath, err := filepath.Abs(filepath.Join(r.WorkDir, relPath))
+	if err != nil {
+		return fmt.Errorf("resolve path %s: %w", relPath, err)
+	}
+	// Prevent path traversal outside the repo
+	if !strings.HasPrefix(absPath, r.WorkDir) {
+		return fmt.Errorf("path '%s' is outside the repository", relPath)
+	}
 	data, err := os.ReadFile(absPath)
 	if err != nil {
 		return fmt.Errorf("read file %s: %w", relPath, err)
@@ -234,6 +281,8 @@ func (r *Repo) Status() (staged []string, modified []string, untracked []string,
 		return nil, nil, nil, err
 	}
 
+	ignorePatterns := LoadIgnorePatterns(r.WorkDir)
+
 	// Track which index entries we've seen in the working directory
 	seen := make(map[string]bool)
 
@@ -247,12 +296,23 @@ func (r *Repo) Status() (staged []string, modified []string, untracked []string,
 			return filepath.SkipDir
 		}
 		if d.IsDir() {
+			// Skip ignored directories entirely
+			relDir := filepath.ToSlash(strings.TrimPrefix(
+				strings.TrimPrefix(path, r.WorkDir), string(filepath.Separator),
+			))
+			if relDir != "" && IsIgnored(relDir, ignorePatterns) {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 		relPath := filepath.ToSlash(strings.TrimPrefix(
 			strings.TrimPrefix(path, r.WorkDir), string(filepath.Separator),
 		))
 		if relPath == "" {
+			return nil
+		}
+		// Skip ignored files
+		if IsIgnored(relPath, ignorePatterns) {
 			return nil
 		}
 
