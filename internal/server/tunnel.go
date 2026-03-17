@@ -70,11 +70,12 @@ func StartTunnel(port int, vibeDir string) (*Tunnel, error) {
 	urlCh := make(chan string, 1)
 	go func() {
 		scanner := bufio.NewScanner(stderr)
+		// Match tunnel URLs but exclude api.trycloudflare.com (appears in error messages)
 		re := regexp.MustCompile(`https://[a-zA-Z0-9-]+\.trycloudflare\.com`)
 		for scanner.Scan() {
 			line := scanner.Text()
 			log.Printf("[cloudflared] %s", line)
-			if match := re.FindString(line); match != "" {
+			if match := re.FindString(line); match != "" && !strings.Contains(match, "api.trycloudflare.com") {
 				select {
 				case urlCh <- match:
 				default:

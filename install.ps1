@@ -145,7 +145,7 @@ if (-not $sourceDir) {
 
     $gitCmd = Get-Command git -ErrorAction SilentlyContinue
     if ($gitCmd) {
-        & git clone --depth 1 https://github.com/vibe-vcs/vibe.git $sourceDir
+        & git clone --depth 1 https://github.com/Jay73737/Vibe.git $sourceDir
         if ($LASTEXITCODE -ne 0) {
             Write-Err "Failed to clone repository."
             exit 1

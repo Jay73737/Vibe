@@ -146,7 +146,7 @@ else
 
     if command -v git &>/dev/null; then
         step "Cloning vibe repository..."
-        git clone --depth 1 https://github.com/vibe-vcs/vibe.git "$SOURCE_DIR"
+        git clone --depth 1 https://github.com/Jay73737/Vibe.git "$SOURCE_DIR"
     else
         step "Downloading source archive..."
         TMP_ZIP="$(mktemp)"
