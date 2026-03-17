@@ -91,6 +91,9 @@ func main() {
 		cmdServe()
 	case "ui":
 		cmdUI()
+	// Audit
+	case "audit":
+		cmdAudit()
 	case "help", "--help", "-h":
 		printUsage()
 	case "--version", "version":
@@ -152,6 +155,9 @@ Server:
   serve                 Start server (--port, --token, --config)
   ui                    Open web dashboard (--port, --server)
 
+Security:
+  audit                 View audit log (-n 50, --all)
+
 Set VIBE_AUTHOR or run 'vibe config author "name"' to set your identity.
 Create a .vibeignore file to exclude files from tracking.`)
 }
@@ -181,6 +187,7 @@ func cmdVibe() {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
+	auditCLI(repo, "vibe", fmt.Sprintf("branch=%s", name))
 	fmt.Printf("Vibing on '%s' — go wild, 'vibe nuke %s' to throw it away.\n", name, name)
 }
 
@@ -229,6 +236,7 @@ func cmdSave() {
 		os.Exit(1)
 	}
 	branchName, _, _ := repo.Head()
+	auditCLI(repo, "save", fmt.Sprintf("branch=%s commit=%s msg=%s", branchName, h.Short(), message))
 	fmt.Printf("[%s %s] %s\n", branchName, h.Short(), message)
 }
 
@@ -265,6 +273,7 @@ func cmdNuke() {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
+	auditCLI(repo, "nuke", fmt.Sprintf("branch=%s", target))
 	fmt.Printf("Nuked branch '%s'. Gone forever.\n", target)
 }
 
@@ -359,6 +368,7 @@ func cmdInit() {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
+	auditCLI(repo, "init", fmt.Sprintf("initialized repo at %s", repo.WorkDir))
 	fmt.Printf("Initialized empty vibe repository in %s\n", repo.VibeDir)
 }
 
@@ -444,6 +454,7 @@ func cmdCommit() {
 	}
 
 	branchName, _, _ := repo.Head()
+	auditCLI(repo, "commit", fmt.Sprintf("branch=%s commit=%s msg=%s", branchName, h.Short(), message))
 	fmt.Printf("[%s %s] %s\n", branchName, h.Short(), message)
 }
 
@@ -540,6 +551,7 @@ func cmdBranch() {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
+	auditCLI(repo, "branch", fmt.Sprintf("created branch=%s", os.Args[2]))
 	fmt.Printf("Created branch '%s'\n", os.Args[2])
 }
 
@@ -588,6 +600,7 @@ func cmdSwitch() {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
+	auditCLI(repo, "switch", fmt.Sprintf("branch=%s", target))
 	fmt.Printf("Switched to branch '%s'\n", target)
 	if !noSession {
 		fmt.Println("(previous work auto-saved as session)")
@@ -609,6 +622,7 @@ func cmdDestroy() {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
+	auditCLI(repo, "destroy", fmt.Sprintf("branch=%s", os.Args[2]))
 	fmt.Printf("Destroyed branch '%s'\n", os.Args[2])
 }
 
@@ -737,6 +751,7 @@ func cmdRevert() {
 	}
 
 	branchName, _, _ := repo.Head()
+	auditCLI(repo, "revert", fmt.Sprintf("branch=%s to=%s commit=%s", branchName, targetHash.Short(), newHash.Short()))
 	fmt.Printf("[%s %s] Revert to %s\n", branchName, newHash.Short(), targetHash.Short())
 }
 
@@ -868,6 +883,7 @@ func cmdGrant() {
 	}
 
 	user, _ := mgr.GetUser(userName)
+	auditCLI(repo, "grant", fmt.Sprintf("user=%s role=%s", userName, role))
 	fmt.Printf("Granted '%s' role to %s\n", role, userName)
 	fmt.Printf("Token: %s\n", user.Token)
 }
@@ -887,6 +903,7 @@ func cmdRevoke() {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
+	auditCLI(repo, "revoke", fmt.Sprintf("user=%s", os.Args[2]))
 	fmt.Printf("Revoked access for '%s'\n", os.Args[2])
 }
 
@@ -1062,6 +1079,50 @@ func cmdSync() {
 	} else {
 		fmt.Printf("Synced %d changed file(s) from source.\n", changed)
 		fmt.Println("Run 'vibe pull' to fetch updated contents.")
+	}
+}
+
+// auditCLI logs an action to the repo's audit log (best-effort, never fails the command).
+func auditCLI(repo *core.Repo, action, detail string) {
+	audit := core.NewAuditLog(repo.VibeDir)
+	audit.Log(action, getAuthor(), detail, "cli", "local")
+}
+
+func cmdAudit() {
+	repo, err := core.FindRepo(".")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+
+	limit := 50
+	for i := 2; i < len(os.Args); i++ {
+		if (os.Args[i] == "-n" || os.Args[i] == "--limit") && i+1 < len(os.Args) {
+			fmt.Sscanf(os.Args[i+1], "%d", &limit)
+			i++
+		}
+		if os.Args[i] == "--all" {
+			limit = 0
+		}
+	}
+
+	audit := core.NewAuditLog(repo.VibeDir)
+	entries, err := audit.Read(limit)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+
+	if len(entries) == 0 {
+		fmt.Println("No audit log entries.")
+		return
+	}
+
+	fmt.Printf("%-20s %-12s %-15s %-6s %s\n", "TIMESTAMP", "ACTION", "USER", "SRC", "DETAIL")
+	fmt.Printf("%-20s %-12s %-15s %-6s %s\n", "---------", "------", "----", "---", "------")
+	for _, e := range entries {
+		ts := e.Timestamp.Format("2006-01-02 15:04:05")
+		fmt.Printf("%-20s %-12s %-15s %-6s %s\n", ts, e.Action, e.User, e.Source, e.Detail)
 	}
 }
 

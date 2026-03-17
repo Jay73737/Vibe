@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/gorilla/websocket"
 	"github.com/vibe-vcs/vibe/internal/core"
@@ -17,10 +18,12 @@ import (
 
 // Server is the Vibe HTTP server that serves repos to linked clients.
 type Server struct {
-	Config *Config
-	Repo   *core.Repo
-	Hub    *Hub
-	Roles  *roles.Manager // nil if roles not configured
+	Config  *Config
+	Repo    *core.Repo
+	Hub     *Hub
+	Roles   *roles.Manager // nil if roles not configured
+	Audit   *core.AuditLog
+	Limiter *RateLimiter
 }
 
 func New(cfg *Config) (*Server, error) {
@@ -29,9 +32,11 @@ func New(cfg *Config) (*Server, error) {
 		return nil, fmt.Errorf("repo not found at %s: %w", cfg.RepoPath, err)
 	}
 	srv := &Server{
-		Config: cfg,
-		Repo:   repo,
-		Hub:    NewHub(),
+		Config:  cfg,
+		Repo:    repo,
+		Hub:     NewHub(),
+		Audit:   core.NewAuditLog(repo.VibeDir),
+		Limiter: NewRateLimiter(100, time.Minute), // 100 requests/min per IP
 	}
 	// Check if roles are configured
 	rm := roles.NewManager(repo.VibeDir)
@@ -44,44 +49,39 @@ func New(cfg *Config) (*Server, error) {
 
 // ListenAndServe starts the HTTP server.
 func (s *Server) ListenAndServe() error {
-	mux := http.NewServeMux()
-
-	// API routes
-	mux.HandleFunc("/api/info", s.authMiddleware(s.handleInfo))
-	mux.HandleFunc("/api/refs", s.authMiddleware(s.handleRefs))
-	mux.HandleFunc("/api/objects/", s.authMiddleware(s.handleObject))
-	mux.HandleFunc("/api/tree/", s.authMiddleware(s.handleTree))
-	mux.HandleFunc("/api/commit/", s.authMiddleware(s.handleCommit))
-	mux.HandleFunc("/api/blob/", s.authMiddleware(s.handleBlob))
-	mux.HandleFunc("/api/manifest", s.authMiddleware(s.handleManifest))
-	mux.HandleFunc("/api/push", s.authMiddleware(s.writeMiddleware(s.handlePush)))
-	mux.HandleFunc("/api/roles", s.authMiddleware(s.handleRoles))
-	mux.HandleFunc("/ws", s.authMiddleware(s.handleWebSocket))
+	handler := s.buildHandler()
 
 	addr := fmt.Sprintf("%s:%d", s.Config.Host, s.Config.Port)
 	log.Printf("Vibe server listening on %s", addr)
 	log.Printf("Serving repo: %s", s.Repo.WorkDir)
 	log.Printf("WebSocket endpoint: ws://%s/ws", addr)
+	log.Printf("Rate limiting: 100 requests/min per IP")
 
 	if s.Config.TLS.Enabled {
-		return http.ListenAndServeTLS(addr, s.Config.TLS.CertFile, s.Config.TLS.KeyFile, mux)
+		return http.ListenAndServeTLS(addr, s.Config.TLS.CertFile, s.Config.TLS.KeyFile, handler)
 	}
-	return http.ListenAndServe(addr, mux)
+	return http.ListenAndServe(addr, handler)
 }
 
 // Handler returns the HTTP handler (useful for testing).
 func (s *Server) Handler() http.Handler {
+	return s.buildHandler()
+}
+
+func (s *Server) buildHandler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/api/info", s.authMiddleware(s.handleInfo))
-	mux.HandleFunc("/api/refs", s.authMiddleware(s.handleRefs))
-	mux.HandleFunc("/api/objects/", s.authMiddleware(s.handleObject))
-	mux.HandleFunc("/api/tree/", s.authMiddleware(s.handleTree))
-	mux.HandleFunc("/api/commit/", s.authMiddleware(s.handleCommit))
-	mux.HandleFunc("/api/blob/", s.authMiddleware(s.handleBlob))
-	mux.HandleFunc("/api/manifest", s.authMiddleware(s.handleManifest))
-	mux.HandleFunc("/api/push", s.authMiddleware(s.writeMiddleware(s.handlePush)))
-	mux.HandleFunc("/api/roles", s.authMiddleware(s.handleRoles))
-	mux.HandleFunc("/ws", s.authMiddleware(s.handleWebSocket))
+	rl := s.Limiter.Middleware
+
+	mux.HandleFunc("/api/info", rl(s.authMiddleware(s.handleInfo)))
+	mux.HandleFunc("/api/refs", rl(s.authMiddleware(s.handleRefs)))
+	mux.HandleFunc("/api/objects/", rl(s.authMiddleware(s.handleObject)))
+	mux.HandleFunc("/api/tree/", rl(s.authMiddleware(s.handleTree)))
+	mux.HandleFunc("/api/commit/", rl(s.authMiddleware(s.handleCommit)))
+	mux.HandleFunc("/api/blob/", rl(s.authMiddleware(s.handleBlob)))
+	mux.HandleFunc("/api/manifest", rl(s.authMiddleware(s.handleManifest)))
+	mux.HandleFunc("/api/push", rl(s.authMiddleware(s.writeMiddleware(s.handlePush))))
+	mux.HandleFunc("/api/roles", rl(s.authMiddleware(s.handleRoles)))
+	mux.HandleFunc("/ws", s.authMiddleware(s.handleWebSocket)) // no rate limit on WS
 	return mux
 }
 
@@ -104,21 +104,25 @@ func (s *Server) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		// Role-based auth takes priority
 		if s.Roles != nil {
 			if token == "" {
+				s.Audit.Log("auth_failed", "", "missing token", "server", r.RemoteAddr)
 				http.Error(w, "unauthorized — token required", http.StatusUnauthorized)
 				return
 			}
 			user, err := s.Roles.GetUserByToken(token)
 			if err != nil {
+				s.Audit.Log("auth_failed", "", "invalid token", "server", r.RemoteAddr)
 				http.Error(w, "unauthorized — invalid token", http.StatusUnauthorized)
 				return
 			}
 			if !roles.CanRead(user.Role) {
+				s.Audit.Log("auth_denied", user.Name, "insufficient permissions", "server", r.RemoteAddr)
 				http.Error(w, "forbidden", http.StatusForbidden)
 				return
 			}
 			// Store user info in header for downstream handlers
 			r.Header.Set("X-Vibe-User", user.Name)
 			r.Header.Set("X-Vibe-Role", string(user.Role))
+			s.Audit.Log("access", user.Name, r.Method+" "+r.URL.Path, "server", r.RemoteAddr)
 			next(w, r)
 			return
 		}
@@ -126,10 +130,12 @@ func (s *Server) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		// Fallback: simple shared token
 		if s.Config.Auth.Token != "" {
 			if token != s.Config.Auth.Token {
+				s.Audit.Log("auth_failed", "", "invalid shared token", "server", r.RemoteAddr)
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
 				return
 			}
 		}
+		s.Audit.Log("access", "anonymous", r.Method+" "+r.URL.Path, "server", r.RemoteAddr)
 		next(w, r)
 	}
 }
@@ -334,6 +340,13 @@ func (s *Server) handlePush(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+
+	// Audit the push
+	user := r.Header.Get("X-Vibe-User")
+	if user == "" {
+		user = "anonymous"
+	}
+	s.Audit.Log("push", user, fmt.Sprintf("branch=%s head=%s objects=%d", pushData.Branch, pushData.Head, len(pushData.Objects)), "server", r.RemoteAddr)
 
 	// Broadcast to all connected clients
 	s.Hub.Broadcast(&Event{
