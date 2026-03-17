@@ -1,0 +1,15 @@
+[Unit]
+Description=Vibe VCS Server
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/vibe serve --config /etc/vibe/server.toml
+Restart=always
+RestartSec=5
+User=vibe
+Group=vibe
+WorkingDirectory=/var/lib/vibe
+
+[Install]
+WantedBy=multi-user.target

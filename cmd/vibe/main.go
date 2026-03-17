@@ -46,6 +46,8 @@ func main() {
 		cmdSessions()
 	case "restore":
 		cmdRestore()
+	case "import":
+		cmdImport()
 	case "roles":
 		cmdRoles()
 	case "grant":
@@ -104,6 +106,9 @@ History Commands:
   diff <hash> <hash> Compare two commits
   revert <hash>     Revert repo to a previous commit
   blame <file>      Show per-line authorship
+
+Import:
+  import <git-url> [dir]  Clone a git repo and convert to Vibe
 
 Link Commands:
   link <source>     Link to a source repo (local path or URL)
@@ -530,6 +535,35 @@ func cmdBlame() {
 		}
 		fmt.Printf("\033[33m%s\033[0m %-12s %s \033[2m%4d\033[0m | %s\n",
 			bl.CommitHash.Short(), bl.Author, ts, bl.LineNum, bl.Content)
+	}
+}
+
+func cmdImport() {
+	if len(os.Args) < 3 {
+		fmt.Fprintln(os.Stderr, "usage: vibe import <git-url> [target-dir]")
+		os.Exit(1)
+	}
+	gitURL := os.Args[2]
+	targetDir := ""
+	if len(os.Args) > 3 {
+		targetDir = os.Args[3]
+	} else {
+		// Derive directory name from URL
+		parts := strings.Split(strings.TrimSuffix(gitURL, ".git"), "/")
+		targetDir = parts[len(parts)-1]
+	}
+
+	fmt.Printf("Importing %s into %s...\n", gitURL, targetDir)
+	repo, err := core.ImportGit(gitURL, targetDir, getAuthor())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+
+	_, headHash, _ := repo.Head()
+	fmt.Printf("\nImported into vibe repository: %s\n", repo.VibeDir)
+	if !headHash.IsZero() {
+		fmt.Printf("Commit: %s\n", headHash.Short())
 	}
 }
 
