@@ -8,11 +8,17 @@ import (
 
 // Config holds server configuration.
 type Config struct {
-	Host     string `toml:"host"`
-	Port     int    `toml:"port"`
-	RepoPath string `toml:"repo_path"`
-	TLS      TLSConfig `toml:"tls"`
-	Auth     AuthConfig `toml:"auth"`
+	Host     string       `toml:"host"`
+	Port     int          `toml:"port"`
+	RepoPath string       `toml:"repo_path"`
+	TLS      TLSConfig    `toml:"tls"`
+	Auth     AuthConfig   `toml:"auth"`
+	Tunnel   TunnelConfig `toml:"tunnel"`
+}
+
+// TunnelConfig controls the built-in cloudflared quick-tunnel.
+type TunnelConfig struct {
+	Enabled bool `toml:"enabled"`
 }
 
 type TLSConfig struct {

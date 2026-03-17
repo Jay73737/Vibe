@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -48,19 +49,43 @@ func New(cfg *Config) (*Server, error) {
 }
 
 // ListenAndServe starts the HTTP server.
+// If the port is already in use by another vibe server, it kills that process first.
 func (s *Server) ListenAndServe() error {
 	handler := s.buildHandler()
 
 	addr := fmt.Sprintf("%s:%d", s.Config.Host, s.Config.Port)
+
+	// Try to bind the port. If it fails, attempt to kill the existing vibe server.
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		if isAddrInUse(err) {
+			log.Printf("Port %d is already in use, checking for existing vibe server...", s.Config.Port)
+			if killed := killExistingVibe(s.Config.Port); killed {
+				log.Printf("Stopped previous vibe server on port %d", s.Config.Port)
+				// Retry bind after a short pause
+				time.Sleep(500 * time.Millisecond)
+				ln, err = net.Listen("tcp", addr)
+				if err != nil {
+					return fmt.Errorf("port %d still unavailable after stopping old server: %w", s.Config.Port, err)
+				}
+			} else {
+				return fmt.Errorf("port %d is in use by another process (not vibe): %w", s.Config.Port, err)
+			}
+		} else {
+			return err
+		}
+	}
+
 	log.Printf("Vibe server listening on %s", addr)
 	log.Printf("Serving repo: %s", s.Repo.WorkDir)
 	log.Printf("WebSocket endpoint: ws://%s/ws", addr)
 	log.Printf("Rate limiting: 100 requests/min per IP")
 
+	srv := &http.Server{Handler: handler}
 	if s.Config.TLS.Enabled {
-		return http.ListenAndServeTLS(addr, s.Config.TLS.CertFile, s.Config.TLS.KeyFile, handler)
+		return srv.ServeTLS(ln, s.Config.TLS.CertFile, s.Config.TLS.KeyFile)
 	}
-	return http.ListenAndServe(addr, handler)
+	return srv.Serve(ln)
 }
 
 // Handler returns the HTTP handler (useful for testing).

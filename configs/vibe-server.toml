@@ -19,3 +19,9 @@ key_file = ""
 # Clients must send: Authorization: Bearer <token>
 [auth]
 token = ""
+
+# Cloudflare Tunnel (optional)
+# Exposes your server to the internet via a free cloudflared quick-tunnel.
+# Requires cloudflared to be installed: https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/
+[tunnel]
+enabled = false

@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -34,6 +35,8 @@ func main() {
 		cmdNuke()
 	case "share":
 		cmdShare()
+	case "invite":
+		cmdInvite()
 	// Core
 	case "init":
 		cmdInit()
@@ -113,6 +116,7 @@ Quick Workflow:
   vibe <name>           Spin up a new branch and switch to it instantly
   save [message]        Quick add-all + commit in one shot
   nuke [name]           Destroy a branch and revert to where you were
+  invite <user> [role]   Generate a connection invite for someone
   share <branch> <user> Push a branch to a connected user
 
 Core:
@@ -152,7 +156,7 @@ Roles:
   revoke <user>         Remove access
 
 Server:
-  serve                 Start server (--port, --token, --config)
+  serve                 Start server (--port, --token, --tunnel, --config)
   ui                    Open web dashboard (--port, --server)
 
 Security:
@@ -314,6 +318,110 @@ func cmdShare() {
 	fmt.Printf("Shared branch '%s' with %s.\n", branchName, userName)
 	fmt.Printf("They can sync with: vibe sync\n")
 	fmt.Printf("Then switch with:   vibe switch %s\n", branchName)
+}
+
+// vibe invite <user> [role] [--port PORT] — generate a connection invite
+func cmdInvite() {
+	if len(os.Args) < 3 {
+		fmt.Fprintln(os.Stderr, `usage: vibe invite <user> [role] [--port PORT]
+
+Generates a ready-to-paste command that someone else can run to
+connect to your vibe server. Sets up roles automatically if needed.
+
+  role    admin, contributor, or reader (default: contributor)
+  --port  server port (default: 7433)
+
+Examples:
+  vibe invite Alice
+  vibe invite Bob reader --port 8080`)
+		os.Exit(1)
+	}
+
+	userName := os.Args[2]
+	role := roles.Contributor
+	port := 7433
+
+	for i := 3; i < len(os.Args); i++ {
+		switch os.Args[i] {
+		case "--port", "-p":
+			if i+1 < len(os.Args) {
+				fmt.Sscanf(os.Args[i+1], "%d", &port)
+				i++
+			}
+		default:
+			if r := roles.Role(os.Args[i]); roles.ValidRoles[r] {
+				role = r
+			}
+		}
+	}
+
+	repo, err := core.FindRepo(".")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+
+	rm := roles.NewManager(repo.VibeDir)
+
+	// Auto-initialize roles if not set up yet
+	if _, err := rm.Load(); err != nil {
+		author := getAuthor()
+		if initErr := rm.Init(author, ""); initErr != nil {
+			fmt.Fprintf(os.Stderr, "error initializing roles: %v\n", initErr)
+			os.Exit(1)
+		}
+		fmt.Printf("Roles initialized (owner: %s)\n\n", author)
+	}
+
+	// Grant the user (creates them if they don't exist)
+	if err := rm.Grant(userName, role, ""); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+
+	user, err := rm.GetUser(userName)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+
+	auditCLI(repo, "invite", fmt.Sprintf("user=%s role=%s", userName, role))
+
+	// Check if a cloudflared tunnel is active
+	tunnelURL := server.ReadTunnelURL(repo.VibeDir)
+
+	fmt.Printf("Invite for %s (%s):\n\n", userName, role)
+	if tunnelURL != "" {
+		fmt.Printf("  vibe link %s --token %s\n\n", tunnelURL, user.Token)
+		fmt.Println("Send the command above to", userName+".")
+		fmt.Println("This link works from anywhere on the internet.")
+	} else {
+		ip := getOutboundIP()
+		fmt.Printf("  vibe link http://%s:%d --token %s\n\n", ip, port, user.Token)
+		fmt.Println("Send the command above to", userName+".")
+		fmt.Println("Make sure your server is running: vibe serve --port", port)
+		fmt.Println("Tip: use 'vibe serve --tunnel' to make it accessible from anywhere.")
+	}
+}
+
+// getOutboundIP returns the preferred outbound IP of this machine.
+func getOutboundIP() string {
+	conn, err := net.Dial("udp", "8.8.8.8:80")
+	if err != nil {
+		// Fallback: scan interfaces
+		addrs, err := net.InterfaceAddrs()
+		if err != nil {
+			return "YOUR_IP"
+		}
+		for _, addr := range addrs {
+			if ipnet, ok := addr.(*net.IPNet); ok && !ipnet.IP.IsLoopback() && ipnet.IP.To4() != nil {
+				return ipnet.IP.String()
+			}
+		}
+		return "YOUR_IP"
+	}
+	defer conn.Close()
+	return conn.LocalAddr().(*net.UDPAddr).IP.String()
 }
 
 // vibe config — get/set configuration
@@ -957,6 +1065,8 @@ func cmdServe() {
 				cfg.Auth.Token = os.Args[i+1]
 				i++
 			}
+		case "--tunnel":
+			cfg.Tunnel.Enabled = true
 		}
 	}
 
@@ -965,6 +1075,18 @@ func cmdServe() {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
+
+	// Start cloudflared tunnel if requested
+	if cfg.Tunnel.Enabled {
+		tunnel, err := server.StartTunnel(cfg.Port, srv.Repo.VibeDir)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "tunnel error: %v\n", err)
+			os.Exit(1)
+		}
+		defer tunnel.Stop()
+		fmt.Printf("\n  Public URL: %s\n\n", tunnel.URL)
+	}
+
 	if err := srv.ListenAndServe(); err != nil {
 		fmt.Fprintf(os.Stderr, "server error: %v\n", err)
 		os.Exit(1)
