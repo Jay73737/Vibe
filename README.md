@@ -1,6 +1,6 @@
 # Vibe
 
-A modern, lightweight version control system built for the vibe coding era. Spin up branches instantly, experiment freely, nuke what doesn't work, and share your vibes with your team — all from a single binary under 15MB.
+A modern, lightweight version control system built for the vibe coding era. Spin up branches instantly, experiment freely, nuke what doesn't work, and share your work with your team — all from a single binary.
 
 ## Why Vibe?
 
@@ -8,80 +8,81 @@ A modern, lightweight version control system built for the vibe coding era. Spin
 - **Link, don't clone.** `vibe link` connects to any repo — metadata syncs instantly, files fetch on-demand.
 - **Sessions, not stashes.** Switch branches and your work is auto-saved. Come back anytime with `vibe restore`.
 - **Built-in collaboration.** User roles (admin, contributor, reader) and per-user tokens are first-class.
-- **Host anywhere.** `vibe serve` runs on your laptop, a Raspberry Pi, a VPS, or Docker. Lightweight enough for any machine.
-- **Tunnel from anywhere.** `vibe serve --tunnel` exposes your repo to the internet instantly via Cloudflare — no port forwarding, no static IP.
-- **Auto-reconnect.** If the server restarts and gets a new tunnel URL, connected clients discover it automatically via a relay server. No manual re-linking.
-- **Background sync.** A lightweight daemon runs at startup and automatically pulls changes whenever the source pushes — no manual `vibe sync` needed.
-- **Real-time push.** Connected users get live updates over WebSocket when anyone pushes changes.
-- **CLI + Web UI.** Power users get a full CLI. Everyone else gets `vibe ui`.
+- **Host anywhere.** `vibe serve` runs on your laptop, a Raspberry Pi, a VPS, or any machine.
+- **Tunnel from anywhere.** `vibe serve --tunnel` exposes your repo to the internet instantly via Cloudflare — no port forwarding, no static IP required.
+- **Auto-reconnect.** If the server restarts and gets a new tunnel URL, connected clients re-discover it automatically. No manual re-linking.
+- **Background sync.** A lightweight daemon runs at startup and pulls changes automatically — no manual `vibe sync` needed.
+- **Real-time updates.** Connected users get live notifications over WebSocket when changes are pushed.
+- **File transfer.** One-time drop links and a persistent file store, separate from version control.
+- **CLI + Web UI.** Full CLI for power users, `vibe ui` for everyone else.
+
+---
 
 ## Install
 
-### One-line install (Linux/macOS)
+### Linux / macOS
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Jay73737/Vibe/main/install.sh | bash
 ```
 
-### One-line install (Windows)
+### Windows (PowerShell)
 
 ```powershell
 irm https://raw.githubusercontent.com/Jay73737/Vibe/main/install.ps1 | iex
 ```
 
-The installer:
-- Installs Go if not present
-- Installs cloudflared for tunnel support
-- Builds and installs the `vibe` binary
-- Installs and starts the background daemon service
+The installer handles everything: installs Go if needed, installs cloudflared for tunnel support, builds the `vibe` binary, adds it to your PATH, and starts the background daemon service.
 
-### Install from source
+Open a **new terminal** after installing, then run `vibe help`.
+
+### Build from source
 
 ```bash
 git clone https://github.com/Jay73737/Vibe.git
 cd Vibe
 go build -o vibe ./cmd/vibe/
-sudo mv vibe /usr/local/bin/   # Linux/macOS
+sudo mv vibe /usr/local/bin/     # Linux/macOS
 # Windows: move vibe.exe to a folder in your PATH
 ```
 
-## Quick Start
+### Update
 
-##NOTE: 
-On Windows, you need to use the most recent compiled binary which will exist wherever the repo is located locally. 
-cd into the directory where the repo is and use ./vibe.exe instead of the vibe command in the command prompt/powershell.
-
-For example:
-
-```powershell
-cd C:\Users\Jay\vibe
-./vibe.exe init
-./vibe.exe config author "Your Name"
-...
+```bash
+vibe update
 ```
+
+Downloads the latest release binary for your platform and replaces the current executable. Or re-run the installer above — it updates cleanly on all platforms.
+
+---
+
+## Quick Start
 
 ```bash
 mkdir my-project && cd my-project
 vibe init
 vibe config author "Your Name"
 
-# Create some files and save
+# Save some files
 echo "hello world" > hello.txt
-vibe save "initial setup"
+vibe save "initial commit"
 
-# Start a vibe session — spin up a branch and switch to it
-vibe vibe experiment
+# Spin up an experiment branch
+vibe vibe my-experiment
 
 # Hack away...
-echo "wild idea" > experiment.txt
+echo "wild idea" > idea.txt
 vibe save "trying something"
 
-# Didn't work out? Nuke it.
+# Didn't pan out? Nuke it and go back to main.
 vibe nuke
 
-# Worked out? Switch back and keep it.
+# Worked? Merge it in.
 vibe switch main
+vibe merge my-experiment
 ```
+
+---
 
 ## Commands
 
@@ -89,31 +90,34 @@ vibe switch main
 
 | Command | Description |
 |---------|-------------|
-| `vibe vibe <name>` | Create a branch and switch to it in one shot |
-| `vibe save [message]` | Add all files + commit (like git add -A && git commit) |
-| `vibe nuke [name]` | Destroy a branch, switch back to main |
-| `vibe share <branch> <user>` | Share a branch with a connected user |
+| `vibe vibe <name>` | Create a branch and switch to it instantly |
+| `vibe save [message]` | Stage all files and commit in one shot |
+| `vibe nuke [name]` | Destroy a branch and switch back to main |
+| `vibe share <branch> <user>` | Notify a connected user about a branch |
 
 ### Core
 
 | Command | Description |
 |---------|-------------|
 | `vibe init [dir]` | Create a new repository |
-| `vibe uninit` | Delete the repo, notify clients, clean up relay entry |
+| `vibe uninit` | Delete the repo, broadcast shutdown to clients, clean up relay |
 | `vibe add <files>` | Stage files (`vibe add .` for all) |
 | `vibe commit -m "msg"` | Commit staged files |
 | `vibe status` | Show staged, modified, and untracked files |
 | `vibe log` | Show commit history |
-| `vibe config author "name"` | Set your author name |
+| `vibe config author "Name"` | Set your author name |
+| `vibe version` | Show installed version |
+| `vibe update` | Update to the latest release |
 
 ### Branching & Sessions
 
 | Command | Description |
 |---------|-------------|
 | `vibe branch <name>` | Create a new branch |
-| `vibe branches` | List all branches |
-| `vibe switch <name>` | Switch branch (auto-saves your work as a session) |
+| `vibe branches` | List all branches with lineage |
+| `vibe switch <name>` | Switch branch (auto-saves work as a session) |
 | `vibe switch <name> --no-session` | Switch without saving |
+| `vibe merge <branch>` | Merge a branch into current (three-way merge) |
 | `vibe destroy <name>` | Delete a branch and its sessions |
 | `vibe sessions` | List all saved sessions |
 | `vibe restore <session-id>` | Restore a saved session |
@@ -124,51 +128,56 @@ vibe switch main
 |---------|-------------|
 | `vibe diff` | Diff working tree vs last commit |
 | `vibe diff <hash1> <hash2>` | Diff between two commits |
-| `vibe revert <hash>` | Revert to any previous commit (creates a revert commit) |
+| `vibe revert <hash>` | Revert to a previous commit (creates a revert commit) |
 | `vibe blame <file>` | Per-line authorship |
 
 ### Linking & Sync
 
+Linking connects your local directory to a remote vibe server. Files are fetched on-demand and cached locally. The daemon keeps you in sync automatically.
+
 | Command | Description |
 |---------|-------------|
-| `vibe link <source> [dir]` | Link to a repo (local path or URL) |
-| `vibe link <url> [dir] --token <t>` | Link to a remote server with auth |
+| `vibe link <url> [dir] --token <t>` | Link to a remote server |
+| `vibe link <path> [dir]` | Link to a local repo |
 | `vibe fetch <file>` | Fetch a single file on-demand |
-| `vibe pull` | Fetch all files from source (skips files >100MB by default) |
+| `vibe pull` | Fetch all files (skips files >100MB by default) |
 | `vibe pull --no-size-limit` | Fetch all files including large ones |
-| `vibe sync` | Pull latest refs from source |
-| `vibe import <git-url>` | Clone a git repo and convert to Vibe |
+| `vibe sync` | Pull latest refs from source (one-shot) |
+| `vibe import <git-url>` | Import a git repo and convert to Vibe |
 
 ### File Transfer
 
-One-time drops let you send a file to anyone via a link. The file is deleted from the server after pickup — no trace left behind. The store is a persistent scratch space for files you want to share without committing them to the repo.
+One-time drops let you send a file to anyone via a single-use link — the file is deleted from the server immediately after pickup. The store is a persistent scratch space for files you want to share without committing them to version control.
 
 | Command | Description |
 |---------|-------------|
-| `vibe drop <file>` | Create a one-time pickup link (24h TTL by default) |
-| `vibe drop <file> --server <url> --token <t>` | Drop to a remote server without a local repo |
+| `vibe drop <file>` | Create a one-time pickup link (24h TTL) |
 | `vibe drop <file> --ttl 1h` | Custom expiry time |
-| `vibe pickup <url>` | Download a one-time drop (deleted from server after) |
+| `vibe drop <file> --server <url> --token <t>` | Drop to a remote server (no local repo needed) |
+| `vibe drop list` | List all pending drops |
+| `vibe drop cancel <id>` | Cancel a drop before it's picked up |
+| `vibe pickup <url>` | Download a one-time drop link |
 | `vibe store list` | List files in the persistent store |
 | `vibe store put <file> [name]` | Upload a file to the store |
 | `vibe store get <name> [dest]` | Download a file from the store |
 | `vibe store rm <name>` | Delete a file from the store |
 
-Store files live in `.vibe/store/` on the server — not committed, not synced, not version-controlled. Use `--server` and `--token` on any store command to target a remote server without a local vibe repo.
+Store files live in `.vibe/store/` on the server — not committed, not synced, not version-controlled. All store commands accept `--server <url>` and `--token <t>` to target a remote server without a local vibe repo.
 
 ### Roles & Permissions
 
 | Command | Description |
 |---------|-------------|
 | `vibe roles init <name>` | Initialize roles (you become admin) |
-| `vibe roles` | List all users and roles |
-| `vibe grant <user> <role>` | Assign role: `admin`, `contributor`, or `reader` |
+| `vibe roles` | List all users and their roles |
+| `vibe grant <user> <role>` | Assign a role: `admin`, `contributor`, or `reader` |
 | `vibe revoke <user>` | Remove a user's access |
+| `vibe invite <user> [role]` | Generate a ready-to-paste `vibe link` command for a user |
 
 **Roles:**
 - **Admin** — Full control. Manage users, push, configure.
-- **Contributor** — Create branches, push changes.
-- **Reader** — Read-only. Can link and browse, but not modify.
+- **Contributor** — Create branches and push changes.
+- **Reader** — Read-only. Can link and pull, but not push.
 
 ### Server & Tunnels
 
@@ -176,41 +185,127 @@ Store files live in `.vibe/store/` on the server — not committed, not synced, 
 |---------|-------------|
 | `vibe serve` | Start the server (default port 7433) |
 | `vibe serve --tunnel` | Expose to the internet via Cloudflare tunnel |
-| `vibe serve --tunnel-name <name>` | Use a named tunnel for a stable URL across restarts |
+| `vibe serve --tunnel-name <name>` | Named tunnel — stable URL across restarts |
 | `vibe serve --port 8080` | Custom port |
-| `vibe serve --token mysecret` | Require auth token |
-| `vibe serve --config server.toml` | Use a config file |
-| `vibe invite <user> [role]` | Generate a ready-to-paste link command for a user |
-| `vibe ui` | Launch the web UI (default port 7434) |
+| `vibe serve --token <secret>` | Require an auth token |
+| `vibe serve --config vibe.toml` | Load config from a file |
+| `vibe ui` | Open the web dashboard (default port 7434) |
+| `vibe ui --server <url> --token <t>` | Connect UI to a remote server |
 
 ### Daemon & Service
 
+The daemon runs in the background and automatically syncs all linked repos. It re-discovers servers after restarts using stored fallback addresses and the relay.
+
 | Command | Description |
 |---------|-------------|
-| `vibe daemon` | Run the background sync daemon in the foreground |
+| `vibe daemon` | Run the sync daemon in the foreground (for debugging) |
 | `vibe service install` | Install daemon as a startup service |
 | `vibe service uninstall` | Remove the startup service |
-| `vibe service start` | Start the service now |
+| `vibe service start` | Start the service |
 | `vibe service stop` | Stop the service |
-| `vibe service status` | Check service status |
+| `vibe service status` | Check service status and watched repos |
 
-The daemon watches all linked repos and automatically pulls changes when the source pushes. If the server restarts with a new tunnel URL, the daemon re-discovers it using stored fallback addresses and the relay server — no manual re-linking required.
-
-### Relay
+### Security & Audit
 
 | Command | Description |
 |---------|-------------|
-| `vibe relay` | Run a self-hosted relay server (default port 7435) |
+| `vibe audit` | View the last 50 audit log entries |
+| `vibe audit -n 100` | View more entries |
+| `vibe audit --all` | View full audit log |
+
+### Relay (Self-hosted)
+
+A built-in relay is already configured — you don't need to run your own. If you want to self-host:
+
+| Command | Description |
+|---------|-------------|
+| `vibe relay` | Run a relay server (default port 7435) |
 | `vibe relay --port 8080` | Custom port |
 | `vibe relay --data /path` | Persist relay entries to disk |
 
-The relay is a lightweight key-value server that maps repo server IDs to their current tunnel URLs. When a server restarts and gets a new tunnel URL, it publishes the update to the relay. Daemons on client machines query the relay when they can't reach the last known URL.
+---
 
-A hosted relay is built into the default vibe binary. You can also self-host one anywhere with a stable address.
+## Sharing a Repo with Others
+
+### Full walkthrough
+
+**On the host machine:**
+
+```bash
+# 1. Set up your repo
+vibe init
+vibe config author "yourname"
+vibe save "first commit"
+
+# 2. Set up roles (makes you admin)
+vibe roles init yourname
+
+# 3. Start the server with a public tunnel
+vibe serve --tunnel
+```
+
+**In a second terminal (still on host):**
+
+```bash
+# 4. Invite a user — prints a ready-to-run command for them
+vibe invite Alice contributor
+# Output: vibe link https://xyz.trycloudflare.com --token abc123...
+```
+
+**On Alice's machine:**
+
+```bash
+# 5. Alice runs the printed command
+vibe link https://xyz.trycloudflare.com --token abc123...
+
+# 6. Pull all files
+vibe pull
+```
+
+Alice is now connected. The daemon keeps her in sync automatically. If your server restarts and gets a new tunnel URL, Alice's daemon re-discovers it — no re-linking needed.
+
+### Local network only
+
+```bash
+# Host
+vibe serve
+
+# Client (replace with actual IP)
+vibe link http://192.168.1.10:7433 my-copy --token <token>
+vibe pull
+```
+
+---
+
+## Config File
+
+Use a config file instead of flags:
+
+```toml
+host = "0.0.0.0"
+port = 7433
+repo_path = "/path/to/repo"
+
+[auth]
+token = "your-secret-token"
+
+[tunnel]
+enabled = true
+
+[relay]
+url   = "https://vibe-relay.cky37373.workers.dev"
+token = ""  # leave empty — auto-generated per repo at vibe init
+```
+
+Start with: `vibe serve --config vibe.toml`
+
+A full example is in [`configs/vibe.toml.example`](configs/vibe.toml.example).
+
+---
 
 ## .vibeignore
 
-Create a `.vibeignore` file to exclude files from tracking (like `.gitignore`):
+Exclude files from tracking, like `.gitignore`:
 
 ```
 node_modules
@@ -220,174 +315,70 @@ dist
 .DS_Store
 ```
 
-## Hosting a Vibe Server
-
-Vibe servers are lightweight — they run on anything with a network connection. A Raspberry Pi, an old laptop, a $5 VPS, or localhost.
-
-### Quick start with tunnel (recommended)
-
-```bash
-cd my-project
-vibe init
-vibe config author "yourname"
-vibe save "first commit"
-vibe roles init yourname
-vibe serve --tunnel
-```
-
-In another terminal, invite users:
-
-```bash
-vibe invite Alice contributor
-# Prints: vibe link https://your-tunnel.trycloudflare.com --token abc123...
-# Send that command to Alice — she's connected instantly.
-```
-
-If the server restarts (e.g. machine reboots), Alice's daemon re-discovers the new tunnel URL automatically via the relay. No re-linking needed.
-
-### Local network only
-
-```bash
-vibe serve --port 7433
-```
-
-Others connect with:
-
-```bash
-vibe link http://your-ip:7433 my-copy --token <their-token>
-vibe pull
-```
-
-### Config file
-
-```toml
-host = "0.0.0.0"
-port = 7433
-repo_path = "/path/to/repo"
-
-[tls]
-enabled = true
-cert_file = "/etc/ssl/cert.pem"
-key_file  = "/etc/ssl/key.pem"
-
-[auth]
-token = "shared-secret"
-
-[tunnel]
-enabled = true
-
-[relay]
-url   = "https://your-relay.workers.dev"
-token = ""  # leave empty — per-repo token is auto-generated at vibe init
-```
-
-### Docker
-
-```bash
-docker build -t vibe-server .
-docker run -p 7433:7433 -v /path/to/repo:/repo vibe-server serve --tunnel
-```
-
-### Systemd (Linux)
-
-Copy `configs/vibe-daemon.service` to `~/.config/systemd/user/`:
-
-```bash
-systemctl --user enable vibe-daemon
-systemctl --user start vibe-daemon
-```
-
-Or use `vibe service install` which does this automatically.
-
-## Updating Vibe
-
-### On the machine running this repo
-
-```bash
-vibe update
-```
-
-This checks GitHub for the latest release, downloads the right binary for your platform, and replaces the current `vibe` executable atomically.
-
-### On a different machine (linked client)
-
-If the other machine was set up with the install script, just run:
-
-```bash
-vibe update
-```
-
-If it was built from source:
-
-```bash
-git pull
-go build -o vibe ./cmd/vibe/
-sudo mv vibe /usr/local/bin/   # Linux/macOS
-# Windows: replace vibe.exe in your PATH folder
-```
-
-Or re-run the one-line installer — it pulls the latest and reinstalls:
-
-```bash
-# Linux/macOS
-curl -fsSL https://raw.githubusercontent.com/Jay73737/Vibe/main/install.sh | bash
-
-# Windows
-irm https://raw.githubusercontent.com/Jay73737/Vibe/main/install.ps1 | iex
-```
+---
 
 ## How Tunnel Re-discovery Works
 
 When a server restarts it gets a new random tunnel URL. Here's how clients stay connected automatically:
 
 1. **LAN fallback** — At link time, the client stores the server's LAN IP addresses. If the tunnel changes but they're on the same network, the daemon reconnects directly.
-2. **Relay lookup** — Each repo has a unique token generated at `vibe init`. When the server starts with `--tunnel`, it publishes `{server_id, tunnel_url}` to the relay (authenticated with the per-repo token). The daemon queries the relay when all known URLs fail.
+2. **Relay lookup** — Each repo has a unique token generated at `vibe init`. When the server starts with `--tunnel`, it publishes its new URL to the relay (authenticated with that token). The daemon queries the relay when all known URLs fail.
 3. **WebSocket reconnect** — Once the daemon finds the new URL, it reconnects and resumes live sync.
 
-No manual intervention required on the client side.
+No manual intervention required.
+
+---
 
 ## Web UI
 
-`vibe ui` opens a browser dashboard showing:
+`vibe ui` opens a browser dashboard at `http://localhost:7434` showing:
 
 - Repository info (branch, HEAD, file count)
-- File browser
+- File browser with on-demand fetch
 - Commit history
 - Branch list
 - User roles
-- Live event feed (real-time WebSocket notifications)
+- Live event feed (real-time WebSocket)
+
+---
 
 ## How It Works
 
-Vibe uses a content-addressable object store with SHA-256 hashing. Every file, tree, and commit is an immutable object.
+Vibe uses a content-addressable object store with SHA-256 hashing. Every file, tree, and commit is an immutable object stored by hash — similar to Git's internals.
 
 ```
 .vibe/
 ├── HEAD              # Current branch pointer
 ├── index             # Staging area
 ├── config.json       # Local config (author, relay URL, relay token)
-├── roles.json        # User roles and tokens
-├── link.json         # Link source config (includes relay token + server ID)
-├── manifest.json     # Linked file manifest
-├── store/            # Persistent file storage (not VCS-tracked, served at /api/store/)
+├── roles.json        # User roles and per-user tokens
+├── link.json         # Link config (source URL, relay token, server ID)
+├── manifest.json     # File manifest for linked repos
+├── audit.log         # Audit log
+├── store/            # Persistent file store (not VCS-tracked)
 ├── objects/          # Content-addressable store (blobs, trees, commits)
 └── refs/
-    ├── branches/     # Branch pointers
+    ├── branches/     # Branch head pointers
     └── sessions/     # Auto-saved session snapshots
 ```
 
-**Linking** uses hybrid sync: directory structure syncs immediately, file contents fetch on-demand and get cached locally.
+Linking uses hybrid sync: the file manifest (names, hashes, sizes) syncs immediately, actual file contents are fetched on-demand and cached locally.
+
+---
 
 ## Cross-Platform Builds
 
-Single static binary, no dependencies:
-
 ```bash
-GOOS=linux   GOARCH=amd64 go build -o vibe-linux   ./cmd/vibe/
-GOOS=darwin  GOARCH=amd64 go build -o vibe-mac     ./cmd/vibe/
-GOOS=windows GOARCH=amd64 go build -o vibe.exe     ./cmd/vibe/
-GOOS=linux   GOARCH=arm64 go build -o vibe-arm64   ./cmd/vibe/
+GOOS=linux   GOARCH=amd64 go build -o vibe-linux-amd64   ./cmd/vibe/
+GOOS=linux   GOARCH=arm64 go build -o vibe-linux-arm64   ./cmd/vibe/
+GOOS=darwin  GOARCH=amd64 go build -o vibe-darwin-amd64  ./cmd/vibe/
+GOOS=darwin  GOARCH=arm64 go build -o vibe-darwin-arm64  ./cmd/vibe/
+GOOS=windows GOARCH=amd64 go build -o vibe-windows-amd64.exe ./cmd/vibe/
 ```
+
+Release builds are created automatically via GitHub Actions when a version tag is pushed (`git tag v1.0.0 && git push origin v1.0.0`).
+
+---
 
 ## Contributing
 
@@ -396,6 +387,8 @@ GOOS=linux   GOARCH=arm64 go build -o vibe-arm64   ./cmd/vibe/
 3. Make changes
 4. `go test ./...`
 5. Submit a PR
+
+---
 
 ## License
 
