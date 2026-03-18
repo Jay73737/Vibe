@@ -422,6 +422,9 @@ GOOS=windows GOARCH=amd64 go build -o vibe-windows-amd64.exe ./cmd/vibe/
 Release builds are created automatically via GitHub Actions when a version tag is pushed (`git tag v1.0.0 && git push origin v1.0.0`).
 
 ---
+## Donate
+
+https://patreon.com/Vibe737?utm_medium=unknown&utm_source=join_link&utm_campaign=creatorshare_creator&utm_content=copyLink
 
 ## Contributing
 
