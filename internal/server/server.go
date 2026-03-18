@@ -1,6 +1,8 @@
 package server
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,12 +12,71 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
 	"github.com/vibe-vcs/vibe/internal/core"
 	"github.com/vibe-vcs/vibe/internal/roles"
 )
+
+// drop is a one-time file transfer entry.
+type drop struct {
+	ID        string
+	Filename  string
+	Data      []byte
+	CreatedAt time.Time
+	ExpiresAt time.Time
+}
+
+// dropStore holds pending one-time file transfers in memory.
+type dropStore struct {
+	mu    sync.Mutex
+	drops map[string]*drop
+}
+
+func newDropStore() *dropStore {
+	ds := &dropStore{drops: make(map[string]*drop)}
+	go ds.reap()
+	return ds
+}
+
+func (ds *dropStore) add(filename string, data []byte, ttl time.Duration) string {
+	b := make([]byte, 16)
+	rand.Read(b)
+	id := hex.EncodeToString(b)
+	ds.mu.Lock()
+	ds.drops[id] = &drop{
+		ID: id, Filename: filename, Data: data,
+		CreatedAt: time.Now(), ExpiresAt: time.Now().Add(ttl),
+	}
+	ds.mu.Unlock()
+	return id
+}
+
+func (ds *dropStore) take(id string) *drop {
+	ds.mu.Lock()
+	defer ds.mu.Unlock()
+	d, ok := ds.drops[id]
+	if !ok || time.Now().After(d.ExpiresAt) {
+		delete(ds.drops, id)
+		return nil
+	}
+	delete(ds.drops, id) // one-time: delete on pickup
+	return d
+}
+
+func (ds *dropStore) reap() {
+	for range time.Tick(5 * time.Minute) {
+		ds.mu.Lock()
+		for id, d := range ds.drops {
+			if time.Now().After(d.ExpiresAt) {
+				delete(ds.drops, id)
+			}
+		}
+		ds.mu.Unlock()
+	}
+}
 
 // Server is the Vibe HTTP server that serves repos to linked clients.
 type Server struct {
@@ -25,6 +86,7 @@ type Server struct {
 	Roles   *roles.Manager // nil if roles not configured
 	Audit   *core.AuditLog
 	Limiter *RateLimiter
+	Drops   *dropStore
 }
 
 func New(cfg *Config) (*Server, error) {
@@ -37,7 +99,8 @@ func New(cfg *Config) (*Server, error) {
 		Repo:    repo,
 		Hub:     NewHub(),
 		Audit:   core.NewAuditLog(repo.VibeDir),
-		Limiter: NewRateLimiter(1000, time.Minute), // 1000 requests/min per IP
+		Limiter: NewRateLimiter(1000, time.Minute),
+		Drops:   newDropStore(),
 	}
 	// Check if roles are configured
 	rm := roles.NewManager(repo.VibeDir)
@@ -107,6 +170,8 @@ func (s *Server) buildHandler() http.Handler {
 	mux.HandleFunc("/api/push", rl(s.authMiddleware(s.writeMiddleware(s.handlePush))))
 	mux.HandleFunc("/api/roles", rl(s.authMiddleware(s.handleRoles)))
 	mux.HandleFunc("/api/shutdown", rl(s.authMiddleware(s.writeMiddleware(s.handleShutdown))))
+	mux.HandleFunc("/api/drop", rl(s.authMiddleware(s.writeMiddleware(s.handleDrop))))
+	mux.HandleFunc("/api/pickup/", rl(s.handlePickup)) // no auth — token IS the credential
 	mux.HandleFunc("/ws", s.authMiddleware(s.handleWebSocket)) // no rate limit on WS
 	return mux
 }
@@ -532,6 +597,70 @@ func (s *Server) handleShutdown(w http.ResponseWriter, r *http.Request) {
 	})
 	log.Printf("Broadcast repo_shutdown to %d client(s), grace=%ds", s.Hub.ClientCount(), grace)
 	writeJSON(w, map[string]interface{}{"status": "broadcast_sent", "grace_seconds": grace, "clients": s.Hub.ClientCount()})
+}
+
+// POST /api/drop — upload a file for one-time pickup.
+// Multipart form: field "file". Optional query: ?ttl=24h (default 24h).
+// Returns a pickup URL the sender can share.
+func (s *Server) handleDrop(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+	ttl := 24 * time.Hour
+	if v := r.URL.Query().Get("ttl"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			ttl = d
+		}
+	}
+	if err := r.ParseMultipartForm(32 << 20); err != nil {
+		http.Error(w, "invalid multipart form", http.StatusBadRequest)
+		return
+	}
+	f, header, err := r.FormFile("file")
+	if err != nil {
+		http.Error(w, "missing file field", http.StatusBadRequest)
+		return
+	}
+	defer f.Close()
+	data, err := io.ReadAll(f)
+	if err != nil {
+		http.Error(w, "read error", http.StatusInternalServerError)
+		return
+	}
+	id := s.Drops.add(header.Filename, data, ttl)
+	// Build pickup URL using the tunnel URL if available, else server address
+	base := ReadTunnelURL(s.Repo.VibeDir)
+	if base == "" {
+		base = fmt.Sprintf("http://localhost:%d", s.Config.Port)
+	}
+	pickupURL := fmt.Sprintf("%s/api/pickup/%s", base, id)
+	log.Printf("drop: %s (%d bytes, ttl %s) -> %s", header.Filename, len(data), ttl, id)
+	writeJSON(w, map[string]string{
+		"id":         id,
+		"pickup_url": pickupURL,
+		"expires_in": ttl.String(),
+		"command":    fmt.Sprintf("vibe pickup %s", pickupURL),
+	})
+}
+
+// GET /api/pickup/<id> — download a dropped file exactly once, then it's gone.
+func (s *Server) handlePickup(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimPrefix(r.URL.Path, "/api/pickup/")
+	if id == "" {
+		http.Error(w, "id required", http.StatusBadRequest)
+		return
+	}
+	d := s.Drops.take(id)
+	if d == nil {
+		http.Error(w, "not found or already picked up", http.StatusNotFound)
+		return
+	}
+	log.Printf("pickup: served %s (%d bytes) — deleted", d.Filename, len(d.Data))
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename=%q`, filepath.Base(d.Filename)))
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(d.Data)))
+	w.Write(d.Data)
 }
 
 func writeJSON(w http.ResponseWriter, v interface{}) {

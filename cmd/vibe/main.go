@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -23,6 +24,9 @@ import (
 	"github.com/vibe-vcs/vibe/internal/server"
 	"github.com/vibe-vcs/vibe/internal/ui"
 )
+
+// version is set at build time via: go build -ldflags "-X main.version=v1.0.0"
+var version = "dev"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -89,6 +93,10 @@ func main() {
 		cmdPull()
 	case "sync":
 		cmdSync()
+	case "drop":
+		cmdDrop()
+	case "pickup":
+		cmdPickup()
 	// Daemon & Service
 	case "daemon":
 		cmdDaemon()
@@ -116,7 +124,9 @@ func main() {
 	case "help", "--help", "-h":
 		printUsage()
 	case "--version", "version":
-		fmt.Println("vibe v0.1.0")
+		fmt.Println("vibe " + version)
+	case "update":
+		cmdUpdate()
 	default:
 		fmt.Fprintf(os.Stderr, "vibe: unknown command '%s'. Run 'vibe help' for usage.\n", os.Args[1])
 		os.Exit(1)
@@ -1460,6 +1470,244 @@ func cmdPull() {
 	} else {
 		fmt.Printf("Fetched %d file(s).\n", count)
 	}
+}
+
+func cmdUpdate() {
+	type release struct {
+		TagName string `json:"tag_name"`
+		HTMLURL string `json:"html_url"`
+		Assets  []struct {
+			Name               string `json:"name"`
+			BrowserDownloadURL string `json:"browser_download_url"`
+		} `json:"assets"`
+	}
+
+	fmt.Printf("Current version: %s\n", version)
+	fmt.Print("Checking for updates... ")
+
+	resp, err := http.Get("https://api.github.com/repos/Jay73737/Vibe/releases/latest")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "\nerror: %v\n", err)
+		os.Exit(1)
+	}
+	defer resp.Body.Close()
+
+	var rel release
+	if err := json.NewDecoder(resp.Body).Decode(&rel); err != nil || rel.TagName == "" {
+		fmt.Fprintln(os.Stderr, "\nerror: could not parse release info")
+		os.Exit(1)
+	}
+
+	if rel.TagName == version {
+		fmt.Printf("already up to date (%s)\n", version)
+		return
+	}
+	fmt.Printf("new version available: %s\n", rel.TagName)
+
+	// Find the right asset for this platform
+	goos := strings.ToLower(strings.TrimSpace(func() string {
+		switch {
+		case strings.Contains(strings.ToLower(os.Getenv("OS")), "windows"):
+			return "windows"
+		default:
+			return "linux"
+		}
+	}()))
+	// Detect OS properly
+	exePath, _ := os.Executable()
+	goosActual := "linux"
+	if strings.HasSuffix(exePath, ".exe") {
+		goosActual = "windows"
+	}
+	_ = goos
+	goosActual = goosActual // use detected value
+
+	suffix := "-linux-amd64"
+	if goosActual == "windows" {
+		suffix = "-windows-amd64.exe"
+	}
+
+	var downloadURL string
+	for _, a := range rel.Assets {
+		if strings.HasSuffix(a.Name, suffix) {
+			downloadURL = a.BrowserDownloadURL
+			break
+		}
+	}
+	if downloadURL == "" {
+		fmt.Fprintf(os.Stderr, "No binary found for your platform in release %s\n", rel.TagName)
+		fmt.Fprintf(os.Stderr, "Visit: %s\n", rel.HTMLURL)
+		os.Exit(1)
+	}
+
+	fmt.Printf("Downloading %s...\n", downloadURL)
+	dlResp, err := http.Get(downloadURL)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error downloading: %v\n", err)
+		os.Exit(1)
+	}
+	defer dlResp.Body.Close()
+	data, err := io.ReadAll(dlResp.Body)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error reading download: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Replace the current binary atomically
+	exePath, err = os.Executable()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error finding executable: %v\n", err)
+		os.Exit(1)
+	}
+	tmp := exePath + ".new"
+	if err := os.WriteFile(tmp, data, 0755); err != nil {
+		fmt.Fprintf(os.Stderr, "error writing update: %v\n", err)
+		os.Exit(1)
+	}
+	if err := os.Rename(tmp, exePath); err != nil {
+		fmt.Fprintf(os.Stderr, "error replacing binary: %v\n", err)
+		os.Remove(tmp)
+		os.Exit(1)
+	}
+	fmt.Printf("Updated to %s. Run 'vibe version' to confirm.\n", rel.TagName)
+}
+
+func cmdDrop() {
+	if len(os.Args) < 3 {
+		fmt.Fprintln(os.Stderr, "usage: vibe drop <file> [--port PORT] [--ttl 24h]")
+		os.Exit(1)
+	}
+	filePath := os.Args[2]
+	port := 7433
+	ttl := "24h"
+	for i := 3; i < len(os.Args); i++ {
+		switch os.Args[i] {
+		case "--port", "-p":
+			if i+1 < len(os.Args) {
+				fmt.Sscanf(os.Args[i+1], "%d", &port)
+				i++
+			}
+		case "--ttl":
+			if i+1 < len(os.Args) {
+				ttl = os.Args[i+1]
+				i++
+			}
+		}
+	}
+
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error reading file: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Get auth token from linked repo config or roles
+	token := getServerToken()
+
+	// Build multipart request
+	var buf strings.Builder
+	boundary := "vibedropboundary"
+	buf.WriteString("--" + boundary + "\r\n")
+	buf.WriteString(fmt.Sprintf("Content-Disposition: form-data; name=\"file\"; filename=%q\r\n", filepath.Base(filePath)))
+	buf.WriteString("Content-Type: application/octet-stream\r\n\r\n")
+	body := []byte(buf.String())
+	body = append(body, data...)
+	body = append(body, []byte("\r\n--"+boundary+"--\r\n")...)
+
+	url := fmt.Sprintf("http://localhost:%d/api/drop?ttl=%s", port, ttl)
+	req, _ := http.NewRequest(http.MethodPost, url, strings.NewReader(string(body)))
+	req.Header.Set("Content-Type", "multipart/form-data; boundary="+boundary)
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: server not running? Start with: vibe serve\n")
+		os.Exit(1)
+	}
+	defer resp.Body.Close()
+
+	var result map[string]string
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil || resp.StatusCode != http.StatusOK {
+		fmt.Fprintf(os.Stderr, "error: drop failed (status %d)\n", resp.StatusCode)
+		os.Exit(1)
+	}
+
+	fmt.Printf("File ready for one-time pickup (expires in %s):\n\n", result["expires_in"])
+	fmt.Printf("  %s\n\n", result["command"])
+	fmt.Println("Send that command to the recipient. The file is deleted after pickup.")
+}
+
+func cmdPickup() {
+	if len(os.Args) < 3 {
+		fmt.Fprintln(os.Stderr, "usage: vibe pickup <url>")
+		os.Exit(1)
+	}
+	pickupURL := os.Args[2]
+
+	resp, err := http.Get(pickupURL)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound {
+		fmt.Fprintln(os.Stderr, "error: file not found — already picked up or expired")
+		os.Exit(1)
+	}
+	if resp.StatusCode != http.StatusOK {
+		fmt.Fprintf(os.Stderr, "error: server returned %d\n", resp.StatusCode)
+		os.Exit(1)
+	}
+
+	// Get filename from Content-Disposition header
+	filename := "dropped-file"
+	if cd := resp.Header.Get("Content-Disposition"); cd != "" {
+		if i := strings.Index(cd, "filename="); i >= 0 {
+			filename = strings.Trim(cd[i+9:], `"`)
+		}
+	}
+
+	// Don't overwrite existing files
+	out := filename
+	for i := 1; ; i++ {
+		if _, err := os.Stat(out); os.IsNotExist(err) {
+			break
+		}
+		ext := filepath.Ext(filename)
+		out = fmt.Sprintf("%s(%d)%s", strings.TrimSuffix(filename, ext), i, ext)
+	}
+
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error reading response: %v\n", err)
+		os.Exit(1)
+	}
+	if err := os.WriteFile(out, data, 0644); err != nil {
+		fmt.Fprintf(os.Stderr, "error saving file: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("Saved: %s (%d bytes)\n", out, len(data))
+}
+
+// getServerToken reads the auth token from the local repo config or roles file.
+func getServerToken() string {
+	repo, err := core.FindRepo(".")
+	if err != nil {
+		return ""
+	}
+	// Try roles file first (owner token)
+	rm := roles.NewManager(repo.VibeDir)
+	if rf, err := rm.Load(); err == nil {
+		for _, u := range rf.Users {
+			if u.Token != "" {
+				return u.Token
+			}
+		}
+	}
+	return ""
 }
 
 func cmdSync() {
