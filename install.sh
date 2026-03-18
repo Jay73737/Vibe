@@ -16,6 +16,29 @@ warn()  { printf '\033[33m   %s\033[0m\n' "$*"; }
 err()   { printf '\033[31m   %s\033[0m\n' "$*"; }
 die()   { err "$@"; exit 1; }
 
+# download <url> <dest> — curl/wget with a progress bar
+download() {
+    local url="$1" dest="$2"
+    if command -v curl &>/dev/null; then
+        curl -fL --progress-bar "$url" -o "$dest"
+    elif command -v wget &>/dev/null; then
+        wget --progress=bar:force "$url" -O "$dest" 2>&1
+    else
+        die "Neither curl nor wget found. Install one and try again."
+    fi
+}
+
+# spin <pid> — show a spinner while a background process runs
+spin() {
+    local pid="$1" chars='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏' i=0
+    while kill -0 "$pid" 2>/dev/null; do
+        printf '\r   \033[36m%s\033[0m' "${chars:$((i % ${#chars})):1}"
+        i=$((i + 1))
+        sleep 0.1
+    done
+    printf '\r      \r'
+}
+
 # ── Banner ───────────────────────────────────────────────────────────
 echo ""
 printf '\033[35m  vibe installer\033[0m\n'
@@ -53,13 +76,7 @@ else
     TMP_DIR="$(mktemp -d)"
 
     step "Downloading $GO_URL..."
-    if command -v curl &>/dev/null; then
-        curl -fsSL "$GO_URL" -o "$TMP_DIR/$GO_TAR"
-    elif command -v wget &>/dev/null; then
-        wget -q "$GO_URL" -O "$TMP_DIR/$GO_TAR"
-    else
-        die "Neither curl nor wget found. Install one and try again."
-    fi
+    download "$GO_URL" "$TMP_DIR/$GO_TAR"
 
     step "Installing Go to /usr/local/go..."
     if [ -w "/usr/local" ]; then
@@ -116,7 +133,7 @@ else
         CF_URL="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-${GOOS}-${GOARCH}"
         CF_BIN="$INSTALL_DIR/cloudflared"
         mkdir -p "$INSTALL_DIR"
-        if curl -fsSL "$CF_URL" -o "$CF_BIN" 2>/dev/null; then
+        if download "$CF_URL" "$CF_BIN" 2>/dev/null; then
             chmod +x "$CF_BIN"
             CF_INSTALLED=true
             ok "Installed: $CF_BIN"
@@ -150,11 +167,7 @@ else
     else
         step "Downloading source archive..."
         TMP_ZIP="$(mktemp)"
-        if command -v curl &>/dev/null; then
-            curl -fsSL "https://github.com/Jay73737/Vibe/archive/refs/heads/main.tar.gz" -o "$TMP_ZIP"
-        else
-            wget -q "https://github.com/Jay73737/Vibe/archive/refs/heads/main.tar.gz" -O "$TMP_ZIP"
-        fi
+        download "https://github.com/Jay73737/Vibe/archive/refs/heads/main.tar.gz" "$TMP_ZIP"
         tar -xzf "$TMP_ZIP" -C "$SOURCE_DIR" --strip-components=1
         rm -f "$TMP_ZIP"
     fi
@@ -163,7 +176,10 @@ fi
 # ── Step 3: Build vibe ──────────────────────────────────────────────
 step "Building vibe..."
 
-(cd "$SOURCE_DIR" && go build -o vibe ./cmd/vibe)
+(cd "$SOURCE_DIR" && go build -o vibe ./cmd/vibe) &
+BUILD_PID=$!
+spin "$BUILD_PID"
+wait "$BUILD_PID" || die "Build failed."
 ok "Build successful."
 
 # ── Step 4: Install binary ──────────────────────────────────────────

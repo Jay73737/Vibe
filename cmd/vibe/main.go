@@ -1647,14 +1647,19 @@ func cmdDrop() {
 	body = append(body, data...)
 	body = append(body, []byte("\r\n--"+boundary+"--\r\n")...)
 
+	total := int64(len(body))
+	fmt.Printf("  Uploading %s (%s)...\n", filepath.Base(filePath), formatBytes(int64(len(data))))
+
 	dropURL := serverURL + "/api/drop?ttl=" + ttl
-	req, _ := http.NewRequest(http.MethodPost, dropURL, strings.NewReader(string(body)))
+	req, _ := http.NewRequest(http.MethodPost, dropURL, newProgressReader(body, total))
+	req.ContentLength = total
 	req.Header.Set("Content-Type", "multipart/form-data; boundary="+boundary)
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 
 	resp, err := http.DefaultClient.Do(req)
+	fmt.Print("\r\033[K") // clear progress line
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: server not running? Start with: vibe serve\n")
 		os.Exit(1)
@@ -2068,6 +2073,44 @@ func getAuthor() string {
 		return user
 	}
 	return "unknown"
+}
+
+// progressReader wraps a byte slice and prints an upload progress bar.
+type progressReader struct {
+	data    []byte
+	pos     int
+	total   int64
+}
+
+func newProgressReader(data []byte, total int64) *progressReader {
+	return &progressReader{data: data, total: total}
+}
+
+func (r *progressReader) Read(p []byte) (int, error) {
+	if r.pos >= len(r.data) {
+		return 0, io.EOF
+	}
+	n := copy(p, r.data[r.pos:])
+	r.pos += n
+	pct := int(float64(r.pos) / float64(r.total) * 100)
+	filled := pct / 5
+	bar := strings.Repeat("█", filled) + strings.Repeat("░", 20-filled)
+	fmt.Fprintf(os.Stderr, "\r  [%s] %d%%  %s / %s ",
+		bar, pct, formatBytes(int64(r.pos)), formatBytes(r.total))
+	return n, nil
+}
+
+func formatBytes(b int64) string {
+	switch {
+	case b >= 1024*1024*1024:
+		return fmt.Sprintf("%.1f GB", float64(b)/1024/1024/1024)
+	case b >= 1024*1024:
+		return fmt.Sprintf("%.1f MB", float64(b)/1024/1024)
+	case b >= 1024:
+		return fmt.Sprintf("%.1f KB", float64(b)/1024)
+	default:
+		return fmt.Sprintf("%d B", b)
+	}
 }
 
 func mustGetwd() string {
