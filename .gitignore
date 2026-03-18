@@ -1,6 +1,15 @@
 vibe.exe
 *.exe
+*.exe~
 .vibe/
+
+# test/dropped files
+*.7z
+*.zip
+*.tar.gz
+*.png
+*.jpg
+*.jpeg
 
 # wrangler files
 wrangler.jsonc
