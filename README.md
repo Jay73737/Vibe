@@ -121,8 +121,27 @@ vibe switch main
 | `vibe link <source> [dir]` | Link to a repo (local path or URL) |
 | `vibe link <url> [dir] --token <t>` | Link to a remote server with auth |
 | `vibe fetch <file>` | Fetch a single file on-demand |
-| `vibe pull` | Fetch all files from source |
+| `vibe pull` | Fetch all files from source (skips files >100MB by default) |
+| `vibe pull --no-size-limit` | Fetch all files including large ones |
+| `vibe sync` | Pull latest refs from source |
 | `vibe import <git-url>` | Clone a git repo and convert to Vibe |
+
+### File Transfer
+
+One-time drops let you send a file to anyone via a link. The file is deleted from the server after pickup — no trace left behind. The store is a persistent scratch space for files you want to share without committing them to the repo.
+
+| Command | Description |
+|---------|-------------|
+| `vibe drop <file>` | Create a one-time pickup link (24h TTL by default) |
+| `vibe drop <file> --server <url> --token <t>` | Drop to a remote server without a local repo |
+| `vibe drop <file> --ttl 1h` | Custom expiry time |
+| `vibe pickup <url>` | Download a one-time drop (deleted from server after) |
+| `vibe store list` | List files in the persistent store |
+| `vibe store put <file> [name]` | Upload a file to the store |
+| `vibe store get <name> [dest]` | Download a file from the store |
+| `vibe store rm <name>` | Delete a file from the store |
+
+Store files live in `.vibe/store/` on the server — not committed, not synced, not version-controlled. Use `--server` and `--token` on any store command to target a remote server without a local vibe repo.
 
 ### Roles & Permissions
 
@@ -267,6 +286,43 @@ systemctl --user start vibe-daemon
 
 Or use `vibe service install` which does this automatically.
 
+## Updating Vibe
+
+### On the machine running this repo
+
+```bash
+vibe update
+```
+
+This checks GitHub for the latest release, downloads the right binary for your platform, and replaces the current `vibe` executable atomically.
+
+### On a different machine (linked client)
+
+If the other machine was set up with the install script, just run:
+
+```bash
+vibe update
+```
+
+If it was built from source:
+
+```bash
+git pull
+go build -o vibe ./cmd/vibe/
+sudo mv vibe /usr/local/bin/   # Linux/macOS
+# Windows: replace vibe.exe in your PATH folder
+```
+
+Or re-run the one-line installer — it pulls the latest and reinstalls:
+
+```bash
+# Linux/macOS
+curl -fsSL https://raw.githubusercontent.com/Jay73737/Vibe/main/install.sh | bash
+
+# Windows
+irm https://raw.githubusercontent.com/Jay73737/Vibe/main/install.ps1 | iex
+```
+
 ## How Tunnel Re-discovery Works
 
 When a server restarts it gets a new random tunnel URL. Here's how clients stay connected automatically:
@@ -300,6 +356,7 @@ Vibe uses a content-addressable object store with SHA-256 hashing. Every file, t
 ├── roles.json        # User roles and tokens
 ├── link.json         # Link source config (includes relay token + server ID)
 ├── manifest.json     # Linked file manifest
+├── store/            # Persistent file storage (not VCS-tracked, served at /api/store/)
 ├── objects/          # Content-addressable store (blobs, trees, commits)
 └── refs/
     ├── branches/     # Branch pointers
