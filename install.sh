@@ -175,13 +175,16 @@ mkdir -p "$INSTALL_DIR"
 if command -v "$INSTALL_DIR/vibe" &>/dev/null; then
     "$INSTALL_DIR/vibe" service stop 2>/dev/null || true
 fi
+# Also force-kill any lingering vibe process (handles auto-restart race)
+pkill -x vibe 2>/dev/null || true
+sleep 1
 
-# Unlink the old binary before copying (safe even if process is still running —
-# the kernel keeps the old inode alive until the process exits, but the name is
-# freed immediately so the new cp can write without hitting ETXTBSY).
-rm -f "$INSTALL_DIR/vibe"
-cp "$SOURCE_DIR/vibe" "$INSTALL_DIR/vibe"
-chmod +x "$INSTALL_DIR/vibe"
+# Use mv (rename syscall) to atomically replace the binary.
+# mv never opens the destination file so it cannot hit ETXTBSY,
+# even if a stale process still has the old inode mapped.
+cp "$SOURCE_DIR/vibe" "$INSTALL_DIR/vibe.new"
+chmod +x "$INSTALL_DIR/vibe.new"
+mv -f "$INSTALL_DIR/vibe.new" "$INSTALL_DIR/vibe"
 ok "Installed: $INSTALL_DIR/vibe"
 
 # ── Step 5: Update PATH ─────────────────────────────────────────────
