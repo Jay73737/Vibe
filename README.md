@@ -145,24 +145,67 @@ Linking connects your local directory to a remote vibe server. Files are fetched
 | `vibe sync` | Pull latest refs from source (one-shot) |
 | `vibe import <git-url>` | Import a git repo and convert to Vibe |
 
-### File Transfer
+### One-Time File Drop
 
-One-time drops let you send a file to anyone via a single-use link — the file is deleted from the server immediately after pickup. The store is a persistent scratch space for files you want to share without committing them to version control.
+Send a file to anyone with a single-use link. The recipient downloads it once and it's gone — nothing persists on the server. No repo needed on either end.
+
+**How it works:**
+1. You drop a file — the server generates a secret pickup URL
+2. You send the URL to the recipient (paste it in chat, email, etc.)
+3. They run `vibe pickup <url>` — file downloads and is immediately deleted from the server
+
+```bash
+# Drop a file (server must be running)
+vibe drop report.pdf
+#   Uploading report.pdf (2.4 MB)...
+#   File ready for one-time pickup (expires in 24h):
+#
+#     vibe pickup https://xyz.trycloudflare.com/api/pickup/abc123
+#
+#   Send that command to the recipient. The file is deleted after pickup.
+
+# Recipient picks it up
+vibe pickup https://xyz.trycloudflare.com/api/pickup/abc123
+#   Saved: report.pdf (2.4 MB)
+```
 
 | Command | Description |
 |---------|-------------|
-| `vibe drop <file>` | Create a one-time pickup link (24h TTL) |
-| `vibe drop <file> --ttl 1h` | Custom expiry time |
-| `vibe drop <file> --server <url> --token <t>` | Drop to a remote server (no local repo needed) |
-| `vibe drop list` | List all pending drops |
+| `vibe drop <file>` | Create a one-time pickup link (expires in 24h) |
+| `vibe drop <file> --ttl 1h` | Set a custom expiry time |
+| `vibe drop <file> --server <url> --token <t>` | Drop to a specific server (no local repo needed) |
+| `vibe drop list` | List all pending drops and their expiry times |
 | `vibe drop cancel <id>` | Cancel a drop before it's picked up |
-| `vibe pickup <url>` | Download a one-time drop link |
-| `vibe store list` | List files in the persistent store |
-| `vibe store put <file> [name]` | Upload a file to the store |
-| `vibe store get <name> [dest]` | Download a file from the store |
+| `vibe pickup <url>` | Download and delete a dropped file |
+
+### File Store
+
+The file store is a persistent space on the server for files you want to share with your team without committing them to version control. Think of it as a shared scratch drive attached to your repo — large assets, build artifacts, reference files, anything that doesn't belong in commits.
+
+Unlike drops, store files stay until you delete them. Unlike the repo, they are never versioned, never synced to linked clients, and don't count against any size limits.
+
+```bash
+# Upload a file to the store
+vibe store put render.mp4
+
+# Anyone on the team can download it
+vibe store get render.mp4
+
+# See what's in the store
+vibe store list
+
+# Clean up
+vibe store rm render.mp4
+```
+
+| Command | Description |
+|---------|-------------|
+| `vibe store list` | List all files in the store |
+| `vibe store put <file> [name]` | Upload a file (optional custom name) |
+| `vibe store get <name> [dest]` | Download a file |
 | `vibe store rm <name>` | Delete a file from the store |
 
-Store files live in `.vibe/store/` on the server — not committed, not synced, not version-controlled. All store commands accept `--server <url>` and `--token <t>` to target a remote server without a local vibe repo.
+All store commands accept `--server <url>` and `--token <t>` to target a remote server without a local vibe repo. Files are stored in `.vibe/store/` on the server.
 
 ### Roles & Permissions
 
