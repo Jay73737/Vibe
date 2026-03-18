@@ -26,6 +26,20 @@ func (s *ObjectStore) objectPath(h Hash) string {
 	return filepath.Join(s.objectDir(), hex[:2], hex[2:])
 }
 
+// BlobSize returns the byte size of a blob without reading its full contents.
+// The stored file includes a "blob\x00" header, so we subtract 5 bytes.
+func (s *ObjectStore) BlobSize(h Hash) (int64, error) {
+	fi, err := os.Stat(s.objectPath(h))
+	if err != nil {
+		return 0, err
+	}
+	size := fi.Size() - 5 // subtract "blob\x00" header
+	if size < 0 {
+		size = 0
+	}
+	return size, nil
+}
+
 // HasObject checks if an object exists in the store.
 func (s *ObjectStore) HasObject(h Hash) bool {
 	_, err := os.Stat(s.objectPath(h))

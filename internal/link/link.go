@@ -217,21 +217,35 @@ func (m *Manager) Fetch(relPath string) ([]byte, error) {
 }
 
 // Pull fetches ALL files from the source at once.
-func (m *Manager) Pull() (int, error) {
+// Pull fetches all uncached files. maxSize=0 uses the default 100MB limit.
+// Set maxSize=-1 to fetch all files regardless of size.
+func (m *Manager) Pull() (int, error) { return m.PullWithLimit(0) }
+
+func (m *Manager) PullWithLimit(maxSize int64) (int, error) {
+	if maxSize == 0 {
+		maxSize = DefaultMaxFileSize
+	}
 	manifest, err := loadManifest(m.Repo)
 	if err != nil {
 		return 0, fmt.Errorf("load manifest: %w", err)
 	}
 
-	count := 0
+	count, skipped := 0, 0
 	for path, info := range manifest.Files {
 		if info.Cached {
+			continue
+		}
+		if maxSize > 0 && info.Size > maxSize {
+			skipped++
 			continue
 		}
 		if _, err := m.Fetch(path); err != nil {
 			return count, fmt.Errorf("fetch %s: %w", path, err)
 		}
 		count++
+	}
+	if skipped > 0 {
+		fmt.Fprintf(os.Stderr, "  skipped %d file(s) over size limit (use --no-size-limit to fetch all)\n", skipped)
 	}
 	return count, nil
 }
@@ -320,8 +334,11 @@ type FileManifest struct {
 type FileInfo struct {
 	Hash   core.Hash `json:"hash"`
 	Mode   uint32    `json:"mode"`
+	Size   int64     `json:"size,omitempty"`
 	Cached bool      `json:"cached"`
 }
+
+const DefaultMaxFileSize = 100 * 1024 * 1024 // 100MB
 
 func saveLinkConfig(repo *core.Repo, config *LinkConfig) error {
 	data, err := json.MarshalIndent(config, "", "  ")

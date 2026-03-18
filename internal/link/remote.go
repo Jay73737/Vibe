@@ -47,6 +47,58 @@ func (c *RemoteClient) get(path string) ([]byte, error) {
 	return io.ReadAll(resp.Body)
 }
 
+// AuthGet performs an authenticated GET request.
+func (c *RemoteClient) AuthGet(path string) ([]byte, error) {
+	return c.get(path)
+}
+
+// AuthPost performs an authenticated POST request with raw body.
+func (c *RemoteClient) AuthPost(path string, body []byte) error {
+	req, err := http.NewRequest("POST", c.BaseURL+path, strings.NewReader(string(body)))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/octet-stream")
+	if c.Token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.Token)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("request %s: %w", path, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusUnauthorized {
+		return fmt.Errorf("unauthorized — check your token")
+	}
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		return fmt.Errorf("server returned %d for %s", resp.StatusCode, path)
+	}
+	return nil
+}
+
+// AuthDelete performs an authenticated DELETE request.
+func (c *RemoteClient) AuthDelete(path string) error {
+	req, err := http.NewRequest("DELETE", c.BaseURL+path, nil)
+	if err != nil {
+		return err
+	}
+	if c.Token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.Token)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("request %s: %w", path, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusUnauthorized {
+		return fmt.Errorf("unauthorized — check your token")
+	}
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+		return fmt.Errorf("server returned %d for %s", resp.StatusCode, path)
+	}
+	return nil
+}
+
 // ServerInfo holds the response from /api/info.
 type ServerInfo struct {
 	Branch    string   `json:"branch"`
@@ -116,6 +168,7 @@ func (c *RemoteClient) GetManifest() (branch, head string, files map[string]Mani
 type ManifestEntry struct {
 	Hash string `json:"hash"`
 	Mode uint32 `json:"mode"`
+	Size int64  `json:"size,omitempty"`
 }
 
 // GetObject downloads a raw object by hash.
@@ -325,6 +378,7 @@ func SyncRemote(repo *core.Repo, config *LinkConfig) (int, error) {
 		newManifest.Files[name] = FileInfo{
 			Hash:   h,
 			Mode:   entry.Mode,
+			Size:   entry.Size,
 			Cached: cached,
 		}
 	}

@@ -97,6 +97,8 @@ func main() {
 		cmdDrop()
 	case "pickup":
 		cmdPickup()
+	case "store":
+		cmdStore()
 	// Daemon & Service
 	case "daemon":
 		cmdDaemon()
@@ -174,8 +176,16 @@ Import:
 Linking & Sync:
   link <source> [dir]   Link to a repo (auto-creates working branch, registers with daemon)
   fetch <file>          Fetch a file from source on-demand
-  pull                  Fetch all files from source
+  pull [--no-size-limit] Fetch all files from source (default: skip files >100MB)
   sync                  Pull latest refs from source (one-shot, prefer daemon for auto-sync)
+
+File Transfer:
+  drop <file>           Create a one-time pickup link (--server URL, --token, --ttl)
+  pickup <url>          Download a one-time drop link
+  store list            List files in the persistent store
+  store put <file>      Upload a file to the store (--server, --token)
+  store get <name>      Download a file from the store
+  store rm <name>       Delete a file from the store
 
 Roles:
   roles                 List users (use 'roles init <name>' to set up)
@@ -1454,13 +1464,19 @@ func cmdFetch() {
 }
 
 func cmdPull() {
+	maxSize := int64(link.DefaultMaxFileSize)
+	for _, arg := range os.Args[2:] {
+		if arg == "--no-size-limit" {
+			maxSize = -1
+		}
+	}
 	repo, err := core.FindRepo(".")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
 	mgr := link.NewManager(repo)
-	count, err := mgr.Pull()
+	count, err := mgr.PullWithLimit(maxSize)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
@@ -1574,12 +1590,14 @@ func cmdUpdate() {
 
 func cmdDrop() {
 	if len(os.Args) < 3 {
-		fmt.Fprintln(os.Stderr, "usage: vibe drop <file> [--port PORT] [--ttl 24h]")
+		fmt.Fprintln(os.Stderr, "usage: vibe drop <file> [--server URL] [--token TOKEN] [--port PORT] [--ttl 24h]")
 		os.Exit(1)
 	}
 	filePath := os.Args[2]
 	port := 7433
 	ttl := "24h"
+	serverURL := ""
+	token := ""
 	for i := 3; i < len(os.Args); i++ {
 		switch os.Args[i] {
 		case "--port", "-p":
@@ -1592,6 +1610,16 @@ func cmdDrop() {
 				ttl = os.Args[i+1]
 				i++
 			}
+		case "--server", "-s":
+			if i+1 < len(os.Args) {
+				serverURL = os.Args[i+1]
+				i++
+			}
+		case "--token":
+			if i+1 < len(os.Args) {
+				token = os.Args[i+1]
+				i++
+			}
 		}
 	}
 
@@ -1601,8 +1629,13 @@ func cmdDrop() {
 		os.Exit(1)
 	}
 
-	// Get auth token from linked repo config or roles
-	token := getServerToken()
+	// Resolve server URL: explicit > local repo roles > localhost default
+	if serverURL == "" {
+		serverURL = fmt.Sprintf("http://localhost:%d", port)
+	}
+	if token == "" {
+		token = getServerToken()
+	}
 
 	// Build multipart request
 	var buf strings.Builder
@@ -1614,8 +1647,8 @@ func cmdDrop() {
 	body = append(body, data...)
 	body = append(body, []byte("\r\n--"+boundary+"--\r\n")...)
 
-	url := fmt.Sprintf("http://localhost:%d/api/drop?ttl=%s", port, ttl)
-	req, _ := http.NewRequest(http.MethodPost, url, strings.NewReader(string(body)))
+	dropURL := serverURL + "/api/drop?ttl=" + ttl
+	req, _ := http.NewRequest(http.MethodPost, dropURL, strings.NewReader(string(body)))
 	req.Header.Set("Content-Type", "multipart/form-data; boundary="+boundary)
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
@@ -1637,6 +1670,131 @@ func cmdDrop() {
 	fmt.Printf("File ready for one-time pickup (expires in %s):\n\n", result["expires_in"])
 	fmt.Printf("  %s\n\n", result["command"])
 	fmt.Println("Send that command to the recipient. The file is deleted after pickup.")
+}
+
+func cmdStore() {
+	if len(os.Args) < 3 {
+		fmt.Fprintln(os.Stderr, `usage: vibe store <subcommand> [args]
+
+Subcommands:
+  list                    List files in the store
+  put <file> [name]       Upload a file to the store
+  get <name> [dest]       Download a file from the store
+  rm <name>               Delete a file from the store
+
+Flags:
+  --server URL            Server URL (default: http://localhost:7433)
+  --token TOKEN           Auth token (auto-detected from local repo if omitted)`)
+		os.Exit(1)
+	}
+
+	serverURL := "http://localhost:7433"
+	token := ""
+
+	// Parse global flags (can appear anywhere after subcommand)
+	sub := os.Args[2]
+	var positional []string
+	for i := 3; i < len(os.Args); i++ {
+		switch os.Args[i] {
+		case "--server", "-s":
+			if i+1 < len(os.Args) {
+				serverURL = os.Args[i+1]
+				i++
+			}
+		case "--token":
+			if i+1 < len(os.Args) {
+				token = os.Args[i+1]
+				i++
+			}
+		default:
+			positional = append(positional, os.Args[i])
+		}
+	}
+	if token == "" {
+		token = getServerToken()
+	}
+
+	client := link.NewRemoteClient(serverURL, token)
+
+	switch sub {
+	case "list", "ls":
+		data, err := client.AuthGet("/api/store/")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		var result struct {
+			Files []struct {
+				Name string `json:"name"`
+				Size int64  `json:"size"`
+			} `json:"files"`
+		}
+		if err := json.Unmarshal(data, &result); err != nil || len(result.Files) == 0 {
+			fmt.Println("Store is empty.")
+			return
+		}
+		for _, f := range result.Files {
+			fmt.Printf("  %-40s  %d bytes\n", f.Name, f.Size)
+		}
+
+	case "put", "upload":
+		if len(positional) < 1 {
+			fmt.Fprintln(os.Stderr, "usage: vibe store put <file> [name]")
+			os.Exit(1)
+		}
+		filePath := positional[0]
+		name := filepath.Base(filePath)
+		if len(positional) >= 2 {
+			name = positional[1]
+		}
+		fileData, err := os.ReadFile(filePath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error reading file: %v\n", err)
+			os.Exit(1)
+		}
+		if err := client.AuthPost("/api/store/"+name, fileData); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("Stored: %s (%d bytes)\n", name, len(fileData))
+
+	case "get", "download":
+		if len(positional) < 1 {
+			fmt.Fprintln(os.Stderr, "usage: vibe store get <name> [dest]")
+			os.Exit(1)
+		}
+		name := positional[0]
+		dest := name
+		if len(positional) >= 2 {
+			dest = positional[1]
+		}
+		data, err := client.AuthGet("/api/store/" + name)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		if err := os.WriteFile(dest, data, 0644); err != nil {
+			fmt.Fprintf(os.Stderr, "error saving file: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("Saved: %s (%d bytes)\n", dest, len(data))
+
+	case "rm", "remove", "delete":
+		if len(positional) < 1 {
+			fmt.Fprintln(os.Stderr, "usage: vibe store rm <name>")
+			os.Exit(1)
+		}
+		name := positional[0]
+		if err := client.AuthDelete("/api/store/" + name); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("Deleted: %s\n", name)
+
+	default:
+		fmt.Fprintf(os.Stderr, "unknown store subcommand: %s\n", sub)
+		os.Exit(1)
+	}
 }
 
 func cmdPickup() {

@@ -170,6 +170,7 @@ func (s *Server) buildHandler() http.Handler {
 	mux.HandleFunc("/api/push", rl(s.authMiddleware(s.writeMiddleware(s.handlePush))))
 	mux.HandleFunc("/api/roles", rl(s.authMiddleware(s.handleRoles)))
 	mux.HandleFunc("/api/shutdown", rl(s.authMiddleware(s.writeMiddleware(s.handleShutdown))))
+	mux.HandleFunc("/api/store/", rl(s.handleStore))
 	mux.HandleFunc("/api/drop", rl(s.authMiddleware(s.writeMiddleware(s.handleDrop))))
 	mux.HandleFunc("/api/pickup/", rl(s.handlePickup)) // no auth — token IS the credential
 	mux.HandleFunc("/ws", s.authMiddleware(s.handleWebSocket)) // no rate limit on WS
@@ -423,10 +424,14 @@ func (s *Server) handleManifest(w http.ResponseWriter, r *http.Request) {
 
 	files := make(map[string]interface{})
 	for _, entry := range tree.Entries {
-		files[entry.Name] = map[string]interface{}{
+		f := map[string]interface{}{
 			"hash": entry.Hash.String(),
 			"mode": entry.Mode,
 		}
+		if size, err := s.Repo.Store.BlobSize(entry.Hash); err == nil {
+			f["size"] = size
+		}
+		files[entry.Name] = f
 	}
 
 	branch, _, _ := s.Repo.Head()
@@ -597,6 +602,115 @@ func (s *Server) handleShutdown(w http.ResponseWriter, r *http.Request) {
 	})
 	log.Printf("Broadcast repo_shutdown to %d client(s), grace=%ds", s.Hub.ClientCount(), grace)
 	writeJSON(w, map[string]interface{}{"status": "broadcast_sent", "grace_seconds": grace, "clients": s.Hub.ClientCount()})
+}
+
+// /api/store/ — persistent file storage, not tracked by the VCS.
+// Files live in .vibe/store/ and are served/managed here.
+//
+//	GET    /api/store/          — list files (auth required)
+//	GET    /api/store/<name>    — download a file (auth required)
+//	POST   /api/store/<name>    — upload a file (write access required)
+//	DELETE /api/store/<name>    — delete a file (write access required)
+func (s *Server) handleStore(w http.ResponseWriter, r *http.Request) {
+	name := strings.TrimPrefix(r.URL.Path, "/api/store/")
+	storeDir := filepath.Join(s.Repo.VibeDir, "store")
+
+	// Auth check
+	token := s.extractToken(r)
+	if s.Roles != nil {
+		if token == "" {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		user, err := s.Roles.GetUserByToken(token)
+		if err != nil {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		if r.Method == http.MethodPost || r.Method == http.MethodDelete {
+			if !roles.CanWrite(user.Role) {
+				http.Error(w, "forbidden", http.StatusForbidden)
+				return
+			}
+		}
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		if name == "" {
+			// List files
+			entries, err := os.ReadDir(storeDir)
+			if err != nil {
+				writeJSON(w, map[string]interface{}{"files": []string{}})
+				return
+			}
+			type fileEntry struct {
+				Name string `json:"name"`
+				Size int64  `json:"size"`
+			}
+			var files []fileEntry
+			for _, e := range entries {
+				if e.IsDir() {
+					continue
+				}
+				info, _ := e.Info()
+				files = append(files, fileEntry{Name: e.Name(), Size: info.Size()})
+			}
+			if files == nil {
+				files = []fileEntry{}
+			}
+			writeJSON(w, map[string]interface{}{"files": files})
+		} else {
+			// Download
+			filePath := filepath.Join(storeDir, filepath.Base(name))
+			data, err := os.ReadFile(filePath)
+			if err != nil {
+				http.Error(w, "not found", http.StatusNotFound)
+				return
+			}
+			w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename=%q`, filepath.Base(name)))
+			w.Header().Set("Content-Type", "application/octet-stream")
+			w.Write(data)
+		}
+
+	case http.MethodPost:
+		if name == "" {
+			http.Error(w, "name required", http.StatusBadRequest)
+			return
+		}
+		if err := os.MkdirAll(storeDir, 0755); err != nil {
+			http.Error(w, "store error", http.StatusInternalServerError)
+			return
+		}
+		data, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, "read error", http.StatusInternalServerError)
+			return
+		}
+		filePath := filepath.Join(storeDir, filepath.Base(name))
+		if err := os.WriteFile(filePath, data, 0644); err != nil {
+			http.Error(w, "write error", http.StatusInternalServerError)
+			return
+		}
+		log.Printf("store: uploaded %s (%d bytes)", name, len(data))
+		writeJSON(w, map[string]string{"status": "ok", "name": filepath.Base(name)})
+
+	case http.MethodDelete:
+		if name == "" {
+			http.Error(w, "name required", http.StatusBadRequest)
+			return
+		}
+		filePath := filepath.Join(storeDir, filepath.Base(name))
+		if err := os.Remove(filePath); err != nil {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		log.Printf("store: deleted %s", name)
+		writeJSON(w, map[string]string{"status": "ok"})
+
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
 }
 
 // POST /api/drop — upload a file for one-time pickup.
