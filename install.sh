@@ -170,8 +170,16 @@ ok "Build successful."
 step "Installing to $INSTALL_DIR..."
 
 mkdir -p "$INSTALL_DIR"
-cp "$SOURCE_DIR/vibe" "$INSTALL_DIR/vibe"
-chmod +x "$INSTALL_DIR/vibe"
+
+# Stop the daemon if running so the binary isn't busy
+if command -v "$INSTALL_DIR/vibe" &>/dev/null; then
+    "$INSTALL_DIR/vibe" service stop 2>/dev/null || true
+fi
+
+# Atomic replace: write to a temp file then move into place
+cp "$SOURCE_DIR/vibe" "$INSTALL_DIR/vibe.new"
+chmod +x "$INSTALL_DIR/vibe.new"
+mv "$INSTALL_DIR/vibe.new" "$INSTALL_DIR/vibe"
 ok "Installed: $INSTALL_DIR/vibe"
 
 # ── Step 5: Update PATH ─────────────────────────────────────────────
