@@ -171,15 +171,17 @@ step "Installing to $INSTALL_DIR..."
 
 mkdir -p "$INSTALL_DIR"
 
-# Stop the daemon if running so the binary isn't busy
+# Stop the daemon so the binary is no longer in use
 if command -v "$INSTALL_DIR/vibe" &>/dev/null; then
     "$INSTALL_DIR/vibe" service stop 2>/dev/null || true
 fi
 
-# Atomic replace: write to a temp file then move into place
-cp "$SOURCE_DIR/vibe" "$INSTALL_DIR/vibe.new"
-chmod +x "$INSTALL_DIR/vibe.new"
-mv "$INSTALL_DIR/vibe.new" "$INSTALL_DIR/vibe"
+# Unlink the old binary before copying (safe even if process is still running —
+# the kernel keeps the old inode alive until the process exits, but the name is
+# freed immediately so the new cp can write without hitting ETXTBSY).
+rm -f "$INSTALL_DIR/vibe"
+cp "$SOURCE_DIR/vibe" "$INSTALL_DIR/vibe"
+chmod +x "$INSTALL_DIR/vibe"
 ok "Installed: $INSTALL_DIR/vibe"
 
 # ── Step 5: Update PATH ─────────────────────────────────────────────
