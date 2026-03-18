@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/vibe-vcs/vibe/internal/core"
+	"github.com/Jay73737/Vibe/internal/core"
 )
 
 // RemoteClient handles HTTP communication with a Vibe server.

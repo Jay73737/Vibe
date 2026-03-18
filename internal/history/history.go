@@ -7,7 +7,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/vibe-vcs/vibe/internal/core"
+	"github.com/Jay73737/Vibe/internal/core"
 )
 
 // Manager handles version history operations.

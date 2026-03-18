@@ -154,7 +154,7 @@ step "Preparing vibe source..."
 SOURCE_DIR=""
 CLEANUP_SOURCE=false
 
-if [ -f "./go.mod" ] && head -1 ./go.mod | grep -q "vibe-vcs/vibe"; then
+if [ -f "./go.mod" ] && head -1 ./go.mod | grep -q "Jay73737/Vibe"; then
     SOURCE_DIR="$(pwd)"
     ok "Using local source: $SOURCE_DIR"
 else

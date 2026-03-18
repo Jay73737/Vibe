@@ -1,4 +1,4 @@
-module github.com/vibe-vcs/vibe
+module github.com/Jay73737/Vibe
 
 go 1.24.1
 

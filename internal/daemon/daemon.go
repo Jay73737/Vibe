@@ -14,9 +14,9 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/vibe-vcs/vibe/internal/core"
-	"github.com/vibe-vcs/vibe/internal/link"
-	vibeRelay "github.com/vibe-vcs/vibe/internal/relay"
+	"github.com/Jay73737/Vibe/internal/core"
+	"github.com/Jay73737/Vibe/internal/link"
+	vibeRelay "github.com/Jay73737/Vibe/internal/relay"
 )
 
 // Daemon is the background service that watches linked repos and auto-syncs.

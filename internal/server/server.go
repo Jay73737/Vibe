@@ -16,8 +16,8 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/vibe-vcs/vibe/internal/core"
-	"github.com/vibe-vcs/vibe/internal/roles"
+	"github.com/Jay73737/Vibe/internal/core"
+	"github.com/Jay73737/Vibe/internal/roles"
 )
 
 // drop is a one-time file transfer entry.

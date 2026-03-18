@@ -14,15 +14,15 @@ import (
 
 	"time"
 
-	"github.com/vibe-vcs/vibe/internal/branch"
-	"github.com/vibe-vcs/vibe/internal/core"
-	"github.com/vibe-vcs/vibe/internal/daemon"
-	"github.com/vibe-vcs/vibe/internal/history"
-	"github.com/vibe-vcs/vibe/internal/link"
-	vibeRelay "github.com/vibe-vcs/vibe/internal/relay"
-	"github.com/vibe-vcs/vibe/internal/roles"
-	"github.com/vibe-vcs/vibe/internal/server"
-	"github.com/vibe-vcs/vibe/internal/ui"
+	"github.com/Jay73737/Vibe/internal/branch"
+	"github.com/Jay73737/Vibe/internal/core"
+	"github.com/Jay73737/Vibe/internal/daemon"
+	"github.com/Jay73737/Vibe/internal/history"
+	"github.com/Jay73737/Vibe/internal/link"
+	vibeRelay "github.com/Jay73737/Vibe/internal/relay"
+	"github.com/Jay73737/Vibe/internal/roles"
+	"github.com/Jay73737/Vibe/internal/server"
+	"github.com/Jay73737/Vibe/internal/ui"
 )
 
 // version is set at build time via: go build -ldflags "-X main.version=v1.0.0"

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/vibe-vcs/vibe/internal/core"
+	"github.com/Jay73737/Vibe/internal/core"
 )
 
 // LinkConfig stores the connection between a linked repo and its source.

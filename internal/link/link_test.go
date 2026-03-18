@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/vibe-vcs/vibe/internal/core"
+	"github.com/Jay73737/Vibe/internal/core"
 )
 
 func setupSourceRepo(t *testing.T) *core.Repo {

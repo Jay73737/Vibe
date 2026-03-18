@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/vibe-vcs/vibe/internal/core"
+	"github.com/Jay73737/Vibe/internal/core"
 )
 
 // Session represents an auto-saved snapshot of work when switching branches.

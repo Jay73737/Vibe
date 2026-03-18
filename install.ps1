@@ -161,7 +161,7 @@ Write-Step "Preparing vibe source..."
 $sourceDir = $null
 if (Test-Path ".\go.mod") {
     $modContent = Get-Content ".\go.mod" -First 1
-    if ($modContent -match "github.com/vibe-vcs/vibe") {
+    if ($modContent -match "github.com/Jay73737/Vibe") {
         $sourceDir = (Get-Location).Path
         Write-Ok "Using local source: $sourceDir"
     }
