@@ -1590,9 +1590,24 @@ func cmdUpdate() {
 
 func cmdDrop() {
 	if len(os.Args) < 3 {
-		fmt.Fprintln(os.Stderr, "usage: vibe drop <file> [--server URL] [--token TOKEN] [--port PORT] [--ttl 24h]")
+		fmt.Fprintln(os.Stderr, "usage: vibe drop <file|list|cancel <id>> [--server URL] [--token TOKEN] [--port PORT] [--ttl 24h]")
 		os.Exit(1)
 	}
+
+	// Sub-commands: list and cancel
+	switch os.Args[2] {
+	case "list":
+		cmdDropList(os.Args[3:])
+		return
+	case "cancel":
+		if len(os.Args) < 4 {
+			fmt.Fprintln(os.Stderr, "usage: vibe drop cancel <id>")
+			os.Exit(1)
+		}
+		cmdDropCancel(os.Args[3], os.Args[4:])
+		return
+	}
+
 	filePath := os.Args[2]
 	port := 7433
 	ttl := "24h"
@@ -1800,6 +1815,63 @@ Flags:
 		fmt.Fprintf(os.Stderr, "unknown store subcommand: %s\n", sub)
 		os.Exit(1)
 	}
+}
+
+func parseDropFlags(args []string) (serverURL, token string) {
+	serverURL = "http://localhost:7433"
+	token = getServerToken()
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--server", "-s":
+			if i+1 < len(args) {
+				serverURL = args[i+1]
+				i++
+			}
+		case "--token":
+			if i+1 < len(args) {
+				token = args[i+1]
+				i++
+			}
+		}
+	}
+	return
+}
+
+func cmdDropList(args []string) {
+	serverURL, token := parseDropFlags(args)
+	client := link.NewRemoteClient(serverURL, token)
+	data, err := client.AuthGet("/api/drops")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	var result struct {
+		Drops []struct {
+			ID        string `json:"id"`
+			Filename  string `json:"filename"`
+			Size      int    `json:"size"`
+			ExpiresAt string `json:"expires_at"`
+		} `json:"drops"`
+	}
+	if err := json.Unmarshal(data, &result); err != nil || len(result.Drops) == 0 {
+		fmt.Println("No pending drops.")
+		return
+	}
+	fmt.Printf("%-36s  %-30s  %10s  %s\n", "ID", "FILE", "SIZE", "EXPIRES")
+	fmt.Printf("%-36s  %-30s  %10s  %s\n", "--", "----", "----", "-------")
+	for _, d := range result.Drops {
+		fmt.Printf("%-36s  %-30s  %10s  %s\n", d.ID, d.Filename, formatBytes(int64(d.Size)), d.ExpiresAt)
+	}
+}
+
+func cmdDropCancel(id string, args []string) {
+	serverURL, token := parseDropFlags(args)
+	client := link.NewRemoteClient(serverURL, token)
+	if err := client.AuthDelete("/api/drop/" + id); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("Cancelled drop %s\n", id)
 }
 
 func cmdPickup() {

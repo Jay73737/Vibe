@@ -66,6 +66,26 @@ func (ds *dropStore) take(id string) *drop {
 	return d
 }
 
+func (ds *dropStore) cancel(id string) bool {
+	ds.mu.Lock()
+	defer ds.mu.Unlock()
+	_, ok := ds.drops[id]
+	delete(ds.drops, id)
+	return ok
+}
+
+func (ds *dropStore) list() []*drop {
+	ds.mu.Lock()
+	defer ds.mu.Unlock()
+	out := make([]*drop, 0, len(ds.drops))
+	for _, d := range ds.drops {
+		if time.Now().Before(d.ExpiresAt) {
+			out = append(out, d)
+		}
+	}
+	return out
+}
+
 func (ds *dropStore) reap() {
 	for range time.Tick(5 * time.Minute) {
 		ds.mu.Lock()
@@ -172,7 +192,9 @@ func (s *Server) buildHandler() http.Handler {
 	mux.HandleFunc("/api/shutdown", rl(s.authMiddleware(s.writeMiddleware(s.handleShutdown))))
 	mux.HandleFunc("/api/store/", rl(s.handleStore))
 	mux.HandleFunc("/api/drop", rl(s.authMiddleware(s.writeMiddleware(s.handleDrop))))
-	mux.HandleFunc("/api/pickup/", rl(s.handlePickup)) // no auth — token IS the credential
+	mux.HandleFunc("/api/drops", rl(s.authMiddleware(s.handleDropList)))
+	mux.HandleFunc("/api/drop/", rl(s.authMiddleware(s.handleDropCancel))) // DELETE /api/drop/<id>
+	mux.HandleFunc("/api/pickup/", rl(s.handlePickup))                     // no auth — token IS the credential
 	mux.HandleFunc("/ws", s.authMiddleware(s.handleWebSocket)) // no rate limit on WS
 	return mux
 }
@@ -775,6 +797,45 @@ func (s *Server) handlePickup(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(d.Data)))
 	w.Write(d.Data)
+}
+
+// GET /api/drops — list pending drops (auth required).
+func (s *Server) handleDropList(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	drops := s.Drops.list()
+	type dropInfo struct {
+		ID        string    `json:"id"`
+		Filename  string    `json:"filename"`
+		Size      int       `json:"size"`
+		ExpiresAt time.Time `json:"expires_at"`
+	}
+	out := make([]dropInfo, len(drops))
+	for i, d := range drops {
+		out[i] = dropInfo{ID: d.ID, Filename: d.Filename, Size: len(d.Data), ExpiresAt: d.ExpiresAt}
+	}
+	writeJSON(w, map[string]interface{}{"drops": out})
+}
+
+// DELETE /api/drop/<id> — cancel a pending drop (auth required).
+func (s *Server) handleDropCancel(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	id := strings.TrimPrefix(r.URL.Path, "/api/drop/")
+	if id == "" {
+		http.Error(w, "id required", http.StatusBadRequest)
+		return
+	}
+	if !s.Drops.cancel(id) {
+		http.Error(w, "not found or already picked up", http.StatusNotFound)
+		return
+	}
+	log.Printf("drop: cancelled %s", id)
+	writeJSON(w, map[string]string{"status": "cancelled", "id": id})
 }
 
 func writeJSON(w http.ResponseWriter, v interface{}) {
