@@ -47,6 +47,19 @@ sudo mv vibe /usr/local/bin/   # Linux/macOS
 
 ## Quick Start
 
+##NOTE: 
+On Windows, you need to use the most recent compiled binary which will exist wherever the repo is located locally. 
+cd into the directory where the repo is and use ./vibe.exe instead of the vibe command in the command prompt/powershell.
+
+For example:
+
+```powershell
+cd C:\Users\Jay\vibe
+./vibe.exe init
+./vibe.exe config author "Your Name"
+...
+```
+
 ```bash
 mkdir my-project && cd my-project
 vibe init
