@@ -28,6 +28,35 @@ function Write-Ok($msg)   { Write-Host "   $msg" -ForegroundColor Green }
 function Write-Warn($msg) { Write-Host "   $msg" -ForegroundColor Yellow }
 function Write-Err($msg)  { Write-Host "   $msg" -ForegroundColor Red }
 
+function DownloadFile($url, $dest) {
+    Write-Host "   Downloading $(Split-Path $url -Leaf)..." -ForegroundColor DarkGray
+    $wc = New-Object System.Net.WebClient
+    $wc.Headers.Add("User-Agent", "vibe-installer")
+
+    # Wire up progress reporting
+    $global:_dlDest = $dest
+    Register-ObjectEvent $wc DownloadProgressChanged -SourceIdentifier DlProgress -Action {
+        $pct  = $EventArgs.ProgressPercentage
+        $recv = [math]::Round($EventArgs.BytesReceived / 1MB, 1)
+        $tot  = [math]::Round($EventArgs.TotalBytesToReceive / 1MB, 1)
+        $bar  = ("█" * [int]($pct / 5)).PadRight(20, "░")
+        Write-Host -NoNewline "`r   [$bar] $pct%  $recv MB / $tot MB  "
+    } | Out-Null
+
+    Register-ObjectEvent $wc DownloadFileCompleted -SourceIdentifier DlDone -Action {
+        Write-Host "`r   Done.                                          "
+    } | Out-Null
+
+    try {
+        $wc.DownloadFileAsync([Uri]$url, $dest)
+        while ($wc.IsBusy) { Start-Sleep -Milliseconds 100 }
+    } finally {
+        Unregister-Event DlProgress -ErrorAction SilentlyContinue
+        Unregister-Event DlDone    -ErrorAction SilentlyContinue
+        $wc.Dispose()
+    }
+}
+
 # ── Banner ──────────────────────────────────────────────────────────
 Write-Host ""
 Write-Host "  vibe installer" -ForegroundColor Magenta
@@ -58,9 +87,9 @@ if ($goCmd) {
     $goUrl = "https://go.dev/dl/$goMsi"
     $tmpMsi = Join-Path $env:TEMP $goMsi
 
-    Write-Step "Downloading $goUrl..."
+    Write-Step "Downloading Go $GoVersion..."
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-    Invoke-WebRequest -Uri $goUrl -OutFile $tmpMsi -UseBasicParsing
+    DownloadFile $goUrl $tmpMsi
 
     Write-Step "Installing Go (this may require admin privileges)..."
     $msiArgs = "/i `"$tmpMsi`" /quiet /norestart"
@@ -154,7 +183,7 @@ if (-not $sourceDir) {
         Write-Warn "Git not found. Downloading source archive..."
         $zipUrl = "https://github.com/Jay73737/Vibe/archive/refs/heads/main.zip"
         $zipPath = Join-Path $env:TEMP "vibe-src.zip"
-        Invoke-WebRequest -Uri $zipUrl -OutFile $zipPath -UseBasicParsing
+        DownloadFile $zipUrl $zipPath
         Expand-Archive -Path $zipPath -DestinationPath $env:TEMP -Force
         $sourceDir = Join-Path $env:TEMP "vibe-main"
         Remove-Item $zipPath -ErrorAction SilentlyContinue
@@ -166,9 +195,19 @@ Write-Step "Building vibe..."
 
 Push-Location $sourceDir
 try {
-    & go build -o vibe.exe ./cmd/vibe
-    if ($LASTEXITCODE -ne 0) {
-        Write-Err "Build failed."
+    $buildJob = Start-Job { Set-Location $using:sourceDir; & go build -o vibe.exe ./cmd/vibe 2>&1 }
+    $spinner = "⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"
+    $i = 0
+    while ($buildJob.State -eq "Running") {
+        Write-Host -NoNewline "`r   $($spinner[$i % $spinner.Count]) Building..."
+        $i++
+        Start-Sleep -Milliseconds 100
+    }
+    Write-Host -NoNewline "`r                    `r"
+    $result = Receive-Job $buildJob
+    Remove-Job $buildJob
+    if ($LASTEXITCODE -ne 0 -or $result -match "error") {
+        Write-Err "Build failed: $result"
         exit 1
     }
     Write-Ok "Build successful."
@@ -186,7 +225,20 @@ if (-not (Test-Path $InstallDir)) {
 $srcExe = Join-Path $sourceDir "vibe.exe"
 $dstExe = Join-Path $InstallDir "vibe.exe"
 
+# Stop and uninstall the daemon service before replacing the binary
+if (Test-Path $dstExe) {
+    try { & $dstExe service stop      2>&1 | Out-Null } catch {}
+    try { & $dstExe service uninstall 2>&1 | Out-Null } catch {}
+    Start-Sleep -Seconds 1
+    # Rename old binary out of the way (Windows can't delete running exe,
+    # but rename works; the old file is cleaned up after)
+    $oldExe = "$dstExe.old"
+    Remove-Item $oldExe -ErrorAction SilentlyContinue
+    Rename-Item $dstExe $oldExe -ErrorAction SilentlyContinue
+}
+
 Copy-Item $srcExe $dstExe -Force
+Remove-Item "$dstExe.old" -ErrorAction SilentlyContinue
 Write-Ok "Installed: $dstExe"
 
 # ── Step 5: Update PATH ─────────────────────────────────────────────
