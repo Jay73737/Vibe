@@ -171,11 +171,13 @@ step "Installing to $INSTALL_DIR..."
 
 mkdir -p "$INSTALL_DIR"
 
-# Stop the daemon so the binary is no longer in use
+# Stop and uninstall the daemon service before replacing the binary,
+# so systemd can't auto-restart it mid-install.
 if command -v "$INSTALL_DIR/vibe" &>/dev/null; then
-    "$INSTALL_DIR/vibe" service stop 2>/dev/null || true
+    "$INSTALL_DIR/vibe" service stop      2>/dev/null || true
+    "$INSTALL_DIR/vibe" service uninstall 2>/dev/null || true
 fi
-# Also force-kill any lingering vibe process (handles auto-restart race)
+# Force-kill any remaining vibe process
 pkill -x vibe 2>/dev/null || true
 sleep 1
 
